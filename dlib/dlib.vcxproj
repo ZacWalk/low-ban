@@ -1,0 +1,728 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{C03873A4-9B50-3656-9460-3DBCF8449436}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <Keyword>Win32Proj</Keyword>
+    <Platform>Win32</Platform>
+    <ProjectName>dlib</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(SolutionDir)\intermediate\$(Configuration)\$(Platform)\$(ProjectName)\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(SolutionDir)\intermediate\$(Configuration)\$(Platform)\$(ProjectName)\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(SolutionDir)\intermediate\$(Configuration)\$(Platform)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(SolutionDir)\intermediate\$(Configuration)\$(Platform)\$(ProjectName)\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(ProjectName)</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectName)</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">.lib</TargetExt>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.lib</TargetExt>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(SolutionDir)\intermediate\$(Configuration)\$(Platform)\$(ProjectName)\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(SolutionDir)\intermediate\$(Configuration)\$(Platform)\$(ProjectName)\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(SolutionDir)\intermediate\$(Configuration)\$(Platform)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(SolutionDir)\intermediate\$(Configuration)\$(Platform)\$(ProjectName)\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(ProjectName)</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(ProjectName)</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">.lib</TargetExt>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.lib</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+      <AssemblerListingLocation>Debug/</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
+      <EnableFiberSafeOptimizations>false</EnableFiberSafeOptimizations>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FavorSizeOrSpeed>Neither</FavorSizeOrSpeed>
+      <FloatingPointModel>Fast</FloatingPointModel>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions>false</IntrinsicFunctions>
+      <OmitFramePointers>false</OmitFramePointers>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <WarningLevel>Level3</WarningLevel>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;DLIB_DISABLE_ASSERTS;DLIB_JPEG_SUPPORT;DLIB_PNG_SUPPORT;DLIB__CMAKE_GENERATED_A_CONFIG_H_FILE;DLIB_CHECK_FOR_VERSION_MISMATCH=DLIB_VERSION_MISMATCH_CHECK__EXPECTED_VERSION_19_10_0;DLIB_JPEG_STATIC;CMAKE_INTDIR="Debug";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;DLIB_DISABLE_ASSERTS;DLIB_JPEG_SUPPORT;DLIB_PNG_SUPPORT;DLIB__CMAKE_GENERATED_A_CONFIG_H_FILE;DLIB_CHECK_FOR_VERSION_MISMATCH=DLIB_VERSION_MISMATCH_CHECK__EXPECTED_VERSION_19_10_0;DLIB_JPEG_STATIC;CMAKE_INTDIR=\"Debug\";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions)</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+      <AssemblerListingLocation>Debug/</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
+      <EnableFiberSafeOptimizations>false</EnableFiberSafeOptimizations>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FavorSizeOrSpeed>Neither</FavorSizeOrSpeed>
+      <FloatingPointModel>Fast</FloatingPointModel>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions>false</IntrinsicFunctions>
+      <OmitFramePointers>false</OmitFramePointers>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <WarningLevel>Level3</WarningLevel>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;DLIB_DISABLE_ASSERTS;DLIB_JPEG_SUPPORT;DLIB_PNG_SUPPORT;DLIB__CMAKE_GENERATED_A_CONFIG_H_FILE;DLIB_CHECK_FOR_VERSION_MISMATCH=DLIB_VERSION_MISMATCH_CHECK__EXPECTED_VERSION_19_10_0;DLIB_JPEG_STATIC;CMAKE_INTDIR="Debug";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;DLIB_DISABLE_ASSERTS;DLIB_JPEG_SUPPORT;DLIB_PNG_SUPPORT;DLIB__CMAKE_GENERATED_A_CONFIG_H_FILE;DLIB_CHECK_FOR_VERSION_MISMATCH=DLIB_VERSION_MISMATCH_CHECK__EXPECTED_VERSION_19_10_0;DLIB_JPEG_STATIC;CMAKE_INTDIR=\"Debug\";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions)</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+      <AssemblerListingLocation>Release/</AssemblerListingLocation>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
+      <EnableFiberSafeOptimizations>true</EnableFiberSafeOptimizations>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <FloatingPointModel>Fast</FloatingPointModel>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <OmitFramePointers>true</OmitFramePointers>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <WarningLevel>Level3</WarningLevel>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;DLIB_DISABLE_ASSERTS;DLIB_JPEG_SUPPORT;DLIB_PNG_SUPPORT;DLIB__CMAKE_GENERATED_A_CONFIG_H_FILE;DLIB_CHECK_FOR_VERSION_MISMATCH=DLIB_VERSION_MISMATCH_CHECK__EXPECTED_VERSION_19_10_0;DLIB_JPEG_STATIC;CMAKE_INTDIR="Release";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;DLIB_DISABLE_ASSERTS;DLIB_JPEG_SUPPORT;DLIB_PNG_SUPPORT;DLIB__CMAKE_GENERATED_A_CONFIG_H_FILE;DLIB_CHECK_FOR_VERSION_MISMATCH=DLIB_VERSION_MISMATCH_CHECK__EXPECTED_VERSION_19_10_0;DLIB_JPEG_STATIC;CMAKE_INTDIR=\"Release\";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions)</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+      <AssemblerListingLocation>Release/</AssemblerListingLocation>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
+      <EnableFiberSafeOptimizations>true</EnableFiberSafeOptimizations>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <FloatingPointModel>Fast</FloatingPointModel>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <OmitFramePointers>true</OmitFramePointers>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <WarningLevel>Level3</WarningLevel>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;DLIB_DISABLE_ASSERTS;DLIB_JPEG_SUPPORT;DLIB_PNG_SUPPORT;DLIB__CMAKE_GENERATED_A_CONFIG_H_FILE;DLIB_CHECK_FOR_VERSION_MISMATCH=DLIB_VERSION_MISMATCH_CHECK__EXPECTED_VERSION_19_10_0;DLIB_JPEG_STATIC;CMAKE_INTDIR="Release";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;DLIB_DISABLE_ASSERTS;DLIB_JPEG_SUPPORT;DLIB_PNG_SUPPORT;DLIB__CMAKE_GENERATED_A_CONFIG_H_FILE;DLIB_CHECK_FOR_VERSION_MISMATCH=DLIB_VERSION_MISMATCH_CHECK__EXPECTED_VERSION_19_10_0;DLIB_JPEG_STATIC;CMAKE_INTDIR=\"Release\";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>$(ProjectDir)\external\libpng;$(ProjectDir)\external\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions)</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(ProjectDir)\base64\base64_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\bigint\bigint_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\bigint\bigint_kernel_2.cpp" />
+    <ClCompile Include="$(ProjectDir)\bit_stream\bit_stream_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\entropy_decoder\entropy_decoder_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\entropy_decoder\entropy_decoder_kernel_2.cpp" />
+    <ClCompile Include="$(ProjectDir)\entropy_encoder\entropy_encoder_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\entropy_encoder\entropy_encoder_kernel_2.cpp" />
+    <ClCompile Include="$(ProjectDir)\md5\md5_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\tokenizer\tokenizer_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\unicode\unicode.cpp" />
+    <ClCompile Include="$(ProjectDir)\data_io\image_dataset_metadata.cpp" />
+    <ClCompile Include="$(ProjectDir)\data_io\mnist.cpp" />
+    <ClCompile Include="$(ProjectDir)\global_optimization\global_function_search.cpp" />
+    <ClCompile Include="$(ProjectDir)\filtering\kalman_filter.cpp" />
+    <ClCompile Include="$(ProjectDir)\test_for_odr_violations.cpp" />
+    <ClCompile Include="$(ProjectDir)\sockets\sockets_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\bsp\bsp.cpp" />
+    <ClCompile Include="$(ProjectDir)\linker\linker_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\logger\extra_logger_headers.cpp" />
+    <ClCompile Include="$(ProjectDir)\logger\logger_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\logger\logger_config_file.cpp" />
+    <ClCompile Include="$(ProjectDir)\misc_api\misc_api_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\misc_api\misc_api_kernel_2.cpp" />
+    <ClCompile Include="$(ProjectDir)\sockets\sockets_extensions.cpp" />
+    <ClCompile Include="$(ProjectDir)\sockets\sockets_kernel_2.cpp" />
+    <ClCompile Include="$(ProjectDir)\sockstreambuf\sockstreambuf.cpp" />
+    <ClCompile Include="$(ProjectDir)\sockstreambuf\sockstreambuf_unbuffered.cpp" />
+    <ClCompile Include="$(ProjectDir)\server\server_kernel.cpp" />
+    <ClCompile Include="$(ProjectDir)\server\server_iostream.cpp" />
+    <ClCompile Include="$(ProjectDir)\server\server_http.cpp" />
+    <ClCompile Include="$(ProjectDir)\threads\threaded_object_extension.cpp" />
+    <ClCompile Include="$(ProjectDir)\threads\threads_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\threads\threads_kernel_2.cpp" />
+    <ClCompile Include="$(ProjectDir)\threads\threads_kernel_shared.cpp" />
+    <ClCompile Include="$(ProjectDir)\threads\thread_pool_extension.cpp" />
+    <ClCompile Include="$(ProjectDir)\threads\async.cpp" />
+    <ClCompile Include="$(ProjectDir)\timer\timer.cpp" />
+    <ClCompile Include="$(ProjectDir)\stack_trace.cpp" />
+    <ClCompile Include="$(ProjectDir)\gui_widgets\fonts.cpp" />
+    <ClCompile Include="$(ProjectDir)\gui_widgets\widgets.cpp" />
+    <ClCompile Include="$(ProjectDir)\gui_widgets\drawable.cpp" />
+    <ClCompile Include="$(ProjectDir)\gui_widgets\canvas_drawing.cpp" />
+    <ClCompile Include="$(ProjectDir)\gui_widgets\style.cpp" />
+    <ClCompile Include="$(ProjectDir)\gui_widgets\base_widgets.cpp" />
+    <ClCompile Include="$(ProjectDir)\gui_core\gui_core_kernel_1.cpp" />
+    <ClCompile Include="$(ProjectDir)\gui_core\gui_core_kernel_2.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libpng\png.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngerror.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngget.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngmem.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngpread.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngread.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngrio.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngrtran.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngrutil.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngset.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngtrans.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngwio.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngwrite.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngwtran.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\libpng\pngwutil.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\adler32.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\compress.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\crc32.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\deflate.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\gzclose.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\gzlib.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\gzread.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\gzwrite.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\infback.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\inffast.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\inflate.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\inftrees.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\trees.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\uncompr.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\external\zlib\zutil.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      
+      
+      
+      
+    </ClCompile>
+    <ClCompile Include="$(ProjectDir)\image_loader\png_loader.cpp" />
+    <ClCompile Include="$(ProjectDir)\image_saver\save_png.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcomapi.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdapimin.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdapistd.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdatasrc.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdcoefct.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdcolor.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jddctmgr.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdhuff.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdinput.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdmainct.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdmarker.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdmaster.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdmerge.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdphuff.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdpostct.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdsample.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jerror.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jidctflt.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jidctfst.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jidctint.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jidctred.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jmemmgr.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jmemnobs.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jquant1.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jquant2.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jutils.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcapimin.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jdatadst.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcparam.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcapistd.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcmarker.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcinit.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcmaster.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcdctmgr.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jccoefct.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jccolor.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jchuff.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcmainct.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcphuff.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcprepct.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jcsample.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jfdctint.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jfdctflt.cpp" />
+    <ClCompile Include="$(ProjectDir)\external\libjpeg\jfdctfst.cpp" />
+    <ClCompile Include="$(ProjectDir)\image_loader\jpeg_loader.cpp" />
+    <ClCompile Include="$(ProjectDir)\image_saver\save_jpeg.cpp" />
+    <ClCompile Include="dir_nav\dir_nav_extensions.cpp" />
+    <ClCompile Include="dir_nav\dir_nav_kernel_1.cpp" />
+    <ClCompile Include="dir_nav\dir_nav_kernel_2.cpp" />
+    <ClCompile Include="dnn\cpu_dlib.cpp" />
+    <ClCompile Include="dnn\cublas_dlibapi.cpp" />
+    <ClCompile Include="dnn\cuda_data_ptr.cpp" />
+    <ClCompile Include="dnn\cudnn_dlibapi.cpp" />
+    <ClCompile Include="dnn\curand_dlibapi.cpp" />
+    <ClCompile Include="dnn\gpu_data.cpp" />
+    <ClCompile Include="dnn\tensor_tools.cpp" />
+    <ClCompile Include="threads\multithreaded_object_extension.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="dir_nav\dir_nav_extensions.h" />
+    <ClInclude Include="dir_nav\dir_nav_extensions_abstract.h" />
+    <ClInclude Include="dir_nav\dir_nav_kernel_1.h" />
+    <ClInclude Include="dir_nav\dir_nav_kernel_2.h" />
+    <ClInclude Include="dir_nav\dir_nav_kernel_abstract.h" />
+    <ClInclude Include="dir_nav\posix.h" />
+    <ClInclude Include="dir_nav\windows.h" />
+    <ClInclude Include="dnn\core.h" />
+    <ClInclude Include="dnn\core_abstract.h" />
+    <ClInclude Include="dnn\cpu_dlib.h" />
+    <ClInclude Include="dnn\cublas_dlibapi.h" />
+    <ClInclude Include="dnn\cuda_data_ptr.h" />
+    <ClInclude Include="dnn\cuda_dlib.h" />
+    <ClInclude Include="dnn\cuda_errors.h" />
+    <ClInclude Include="dnn\cuda_utils.h" />
+    <ClInclude Include="dnn\cudnn_dlibapi.h" />
+    <ClInclude Include="dnn\curand_dlibapi.h" />
+    <ClInclude Include="dnn\cusolver_dlibapi.h" />
+    <ClInclude Include="dnn\gpu_data.h" />
+    <ClInclude Include="dnn\gpu_data_abstract.h" />
+    <ClInclude Include="dnn\input.h" />
+    <ClInclude Include="dnn\input_abstract.h" />
+    <ClInclude Include="dnn\layers.h" />
+    <ClInclude Include="dnn\layers_abstract.h" />
+    <ClInclude Include="dnn\loss.h" />
+    <ClInclude Include="dnn\loss_abstract.h" />
+    <ClInclude Include="dnn\solvers.h" />
+    <ClInclude Include="dnn\solvers_abstract.h" />
+    <ClInclude Include="dnn\tensor.h" />
+    <ClInclude Include="dnn\tensor_abstract.h" />
+    <ClInclude Include="dnn\tensor_tools.h" />
+    <ClInclude Include="dnn\trainer.h" />
+    <ClInclude Include="dnn\trainer_abstract.h" />
+    <ClInclude Include="dnn\utilities.h" />
+    <ClInclude Include="dnn\utilities_abstract.h" />
+    <ClInclude Include="dnn\validation.h" />
+    <ClInclude Include="threads\async.h" />
+    <ClInclude Include="threads\async_abstract.h" />
+    <ClInclude Include="threads\auto_mutex_extension.h" />
+    <ClInclude Include="threads\auto_mutex_extension_abstract.h" />
+    <ClInclude Include="threads\auto_unlock_extension.h" />
+    <ClInclude Include="threads\auto_unlock_extension_abstract.h" />
+    <ClInclude Include="threads\create_new_thread_extension.h" />
+    <ClInclude Include="threads\create_new_thread_extension_abstract.h" />
+    <ClInclude Include="threads\multithreaded_object_extension.h" />
+    <ClInclude Include="threads\multithreaded_object_extension_abstract.h" />
+    <ClInclude Include="threads\parallel_for_extension.h" />
+    <ClInclude Include="threads\parallel_for_extension_abstract.h" />
+    <ClInclude Include="threads\posix.h" />
+    <ClInclude Include="threads\read_write_mutex_extension.h" />
+    <ClInclude Include="threads\read_write_mutex_extension_abstract.h" />
+    <ClInclude Include="threads\rmutex_extension.h" />
+    <ClInclude Include="threads\rmutex_extension_abstract.h" />
+    <ClInclude Include="threads\rsignaler_extension.h" />
+    <ClInclude Include="threads\rsignaler_extension_abstract.h" />
+    <ClInclude Include="threads\threaded_object_extension.h" />
+    <ClInclude Include="threads\threaded_object_extension_abstract.h" />
+    <ClInclude Include="threads\threads_kernel.h" />
+    <ClInclude Include="threads\threads_kernel_1.h" />
+    <ClInclude Include="threads\threads_kernel_2.h" />
+    <ClInclude Include="threads\threads_kernel_abstract.h" />
+    <ClInclude Include="threads\threads_kernel_shared.h" />
+    <ClInclude Include="threads\thread_function_extension.h" />
+    <ClInclude Include="threads\thread_function_extension_abstract.h" />
+    <ClInclude Include="threads\thread_pool_extension.h" />
+    <ClInclude Include="threads\thread_pool_extension_abstract.h" />
+    <ClInclude Include="threads\thread_specific_data_extension.h" />
+    <ClInclude Include="threads\thread_specific_data_extension_abstract.h" />
+    <ClInclude Include="threads\windows.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="dnn\cuda_dlib.cu" />
+    <None Include="dnn\cusolver_dlibapi.cu" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
