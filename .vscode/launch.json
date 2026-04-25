@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch low-ban",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/exe/low-ban-d64.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/exe",
+            "preLaunchTask": "Build low-ban"
+        }
+    ]
+}
