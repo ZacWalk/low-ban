@@ -3,16 +3,32 @@
     "tasks": [
         {
             "label": "Build low-ban",
-            "type": "process",
-            "command": "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+            "type": "shell",
+            "command": "pwsh",
             "args": [
-                "low-ban.sln",
-                "/p:Configuration=Debug",
-                "/p:Platform=x64",
-                "/nologo"
+                "-NoProfile",
+                "-File",
+                "${workspaceFolder}/dd.ps1",
+                "build"
             ],
             "group": {
                 "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "Test low-ban",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-File",
+                "${workspaceFolder}/dd.ps1",
+                "test"
+            ],
+            "group": {
+                "kind": "test",
                 "isDefault": true
             },
             "problemMatcher": "$msCompile"

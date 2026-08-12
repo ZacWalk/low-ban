@@ -5,9 +5,21 @@
             "name": "Launch low-ban",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/exe/low-ban-d64.exe",
+            "program": "${workspaceFolder}/exe/low-ban-64d.exe",
             "args": [],
             "cwd": "${workspaceFolder}/exe",
+            "preLaunchTask": "Build low-ban"
+        },
+        {
+            "name": "Debug self test",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/exe/low-ban-64d.exe",
+            "args": [
+                "/test"
+            ],
+            "cwd": "${workspaceFolder}/exe",
+            "console": "integratedTerminal",
             "preLaunchTask": "Build low-ban"
         }
     ]

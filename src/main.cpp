@@ -1,1515 +1,391 @@
-﻿// low-ban : Low Bandwidth Video with Face Landmarking
-// This application demonstrates real-time video processing using Windows Media Foundation 
-// and the dlib C++ library. It captures video from a webcam, performs facial detection, 
-// and extracts 68-point facial landmarks. It also includes an experimental autoencoder 
-// for low-bandwidth video transmission simulation.
-// 
-// Command line arguments:
-//   /test : Runs a headless smoke test indicating if dependencies load properly.
+// low-ban : low bandwidth video with face landmarking.
 //
-
+// The window is deliberately thin: it owns the message loop and the three panes, and does no
+// image processing of its own. Everything else lives in engine/detect/landmarks/codec.
+//
+// Command line:
+//   /test   run the headless self test and exit with a non-zero code on failure
 #include <SDKDDKVer.h>
 
-#define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers
-// Windows Header Files:
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <atlbase.h>
+#include <objbase.h>
 
-#include <Mfapi.h>
-#include <Mfidl.h>
-#include <Mfreadwrite.h>
-
-#pragma comment(lib, "Mfplat.lib")
-#pragma comment(lib, "Mfuuid.lib")
-#pragma comment(lib, "Mf.lib")
-#pragma comment(lib, "Mfreadwrite.lib")
-
-#include <string>
-#include <vector>
-#include <map>
-#include <algorithm>
-#include <atomic>
-#include <iostream>
+#include <cstdio>
 #include <memory>
-#include <mutex>
-#include <thread>
+#include <string>
 
+#include "capture.h"
+#include "engine.h"
 #include "res.h"
 
-#include "../dlib/dnn.h"
-#include "../dlib/image_processing/frontal_face_detector.h"
-#include "../dlib/image_processing/render_face_detections.h"
-#include "../dlib/image_processing.h"
+int run_self_test();
+int run_sample_evaluation();
 
-
-template <class T>
-void SafeRelease(T** ppT)
+namespace
 {
-	if (*ppT)
+	constexpr int video_width = 640;
+	constexpr int video_height = 480;
+	constexpr int layout_padding = 12;
+	constexpr UINT_PTR refresh_timer = 1;
+
+	HINSTANCE instance = nullptr;
+	engine pipeline;
+	uint64_t painted_generation = 0;
+
+	// 8 bit DIB rows are DWORD aligned, so odd widths need a padded copy.
+	void blit_grey(const HDC hdc, const int x, const int y, const image_u8& img)
 	{
-		(*ppT)->Release();
-		*ppT = nullptr;
-	}
-}
+		if (img.empty()) return;
 
-enum class frame_mode_t
-{
-	edgedetect,
-	autoencoder,
-	scale
-};
-
-constexpr int MAX_LOADSTRING = 100;
-std::atomic<frame_mode_t> frame_mode{frame_mode_t::scale};
-std::atomic<bool> exit_app{false};
-std::atomic<bool> show_facedetect{true}; // http://dlib.net/face_landmark_detection_ex.cpp.html
-std::atomic<bool> show_facelandmark{true};
-std::atomic<bool> invalidate{false};
-
-// Global Variables:
-HINSTANCE hInst; // current instance
-HWND hWnd; // current instance
-WCHAR szTitle[MAX_LOADSTRING]; // The title bar text
-WCHAR szWindowClass[MAX_LOADSTRING]; // the main window class name
-
-INT_PTR CALLBACK about_proc(const HWND hDlg, const UINT message, const WPARAM wParam, const LPARAM lParam)
-{
-	UNREFERENCED_PARAMETER(lParam);
-	switch (message)
-	{
-	case WM_INITDIALOG:
-		return TRUE;
-
-	case WM_COMMAND:
-		if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+		struct
 		{
-			EndDialog(hDlg, LOWORD(wParam));
+			BITMAPINFOHEADER header;
+			RGBQUAD palette[256];
+		} bmi = {};
+
+		bmi.header.biSize = sizeof(bmi.header);
+		bmi.header.biWidth = img.width();
+		bmi.header.biHeight = -img.height();
+		bmi.header.biPlanes = 1;
+		bmi.header.biBitCount = 8;
+		bmi.header.biCompression = BI_RGB;
+		bmi.header.biClrUsed = 256;
+
+		for (int i = 0; i < 256; ++i)
+		{
+			bmi.palette[i].rgbRed = static_cast<BYTE>(i);
+			bmi.palette[i].rgbGreen = static_cast<BYTE>(i);
+			bmi.palette[i].rgbBlue = static_cast<BYTE>(i);
+		}
+
+		const int stride = (img.width() + 3) & ~3;
+		if (stride == img.width())
+		{
+			SetDIBitsToDevice(hdc, x, y, img.width(), img.height(), 0, 0, 0, img.height(), img.data(),
+			                  reinterpret_cast<BITMAPINFO*>(&bmi), DIB_RGB_COLORS);
+			return;
+		}
+
+		static std::vector<uint8_t> padded;
+		padded.assign(static_cast<size_t>(stride) * img.height(), 0);
+		for (int row = 0; row < img.height(); ++row)
+		{
+			memcpy(padded.data() + static_cast<size_t>(row) * stride, img.row(row), img.width());
+		}
+
+		SetDIBitsToDevice(hdc, x, y, img.width(), img.height(), 0, 0, 0, img.height(), padded.data(),
+		                  reinterpret_cast<BITMAPINFO*>(&bmi), DIB_RGB_COLORS);
+	}
+
+	void blit_colour(const HDC hdc, const int x, const int y, const int width, const int height,
+	                 const std::vector<uint8_t>& bgra)
+	{
+		if (bgra.size() < static_cast<size_t>(width) * height * 4) return;
+
+		BITMAPINFO bmi = {};
+		bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+		bmi.bmiHeader.biWidth = width;
+		bmi.bmiHeader.biHeight = -height;
+		bmi.bmiHeader.biPlanes = 1;
+		bmi.bmiHeader.biBitCount = 32;
+		bmi.bmiHeader.biCompression = BI_RGB;
+
+		SetDIBitsToDevice(hdc, x, y, width, height, 0, 0, 0, height, bgra.data(), &bmi, DIB_RGB_COLORS);
+	}
+
+	void draw_centred(const HDC hdc, const RECT& bounds, const int y, const wchar_t* text)
+	{
+		SIZE extent = {};
+		const int len = static_cast<int>(wcslen(text));
+		GetTextExtentPoint32W(hdc, text, len, &extent);
+		TextOutW(hdc, (bounds.right - extent.cx) / 2, y, text, len);
+	}
+
+	INT_PTR CALLBACK about_proc(const HWND dialog, const UINT message, const WPARAM wparam, LPARAM)
+	{
+		switch (message)
+		{
+		case WM_INITDIALOG:
 			return TRUE;
-		}
-		break;
-	}
-	return FALSE;
-}
-
-CComPtr<IMFSourceReader> pSourceReader;
-
-struct frame_buffer
-{
-	byte* pixels;
-	int width, height;
-};
-
-class yuv_frame
-{
-	long frame_width = 0, frame_height = 0;
-	int frame_stride = 0; // always positive after construction
-	std::vector<byte> frame_buffer;
-
-public:
-	yuv_frame() = default;
-
-	yuv_frame(const int width, const int height, const int stride, const byte* buffer, const size_t buffer_len)
-		: frame_width(width), frame_height(height)
-	{
-		// MF can return a negative stride to indicate a bottom-up buffer.
-		// Normalize to a top-down, positive stride layout to avoid OOB indexing.
-		const int abs_stride = std::abs(stride);
-		frame_stride = abs_stride;
-		if (abs_stride == 0 || buffer == nullptr || buffer_len == 0)
-		{
-			return;
-		}
-		frame_buffer.resize(static_cast<size_t>(abs_stride) * static_cast<size_t>(height));
-		if (stride < 0)
-		{
-			for (int y = 0; y < height; ++y)
+		case WM_COMMAND:
+			if (LOWORD(wparam) == IDOK || LOWORD(wparam) == IDCANCEL)
 			{
-				const byte* src = buffer + static_cast<size_t>(height - 1 - y) * abs_stride;
-				std::memcpy(frame_buffer.data() + static_cast<size_t>(y) * abs_stride, src, abs_stride);
+				EndDialog(dialog, LOWORD(wparam));
+				return TRUE;
 			}
-		}
-		else
-		{
-			const size_t copy_len = std::min<size_t>(buffer_len, frame_buffer.size());
-			std::memcpy(frame_buffer.data(), buffer, copy_len);
-		}
-	}
-
-	yuv_frame(const yuv_frame&) = delete;
-	yuv_frame& operator=(const yuv_frame&) = delete;
-	yuv_frame(yuv_frame&&) = default;
-	yuv_frame& operator=(yuv_frame&&) = default;
-
-	void populate_array2d(dlib::array2d<unsigned char>& img) const
-	{
-		const auto video_width = std::min<long>(img.nc(), frame_width);
-		const auto video_height = std::min<long>(img.nr(), frame_height);
-
-		for (long y = 0; y < video_height; y++)
-		{
-			const byte* row = frame_buffer.data() + static_cast<size_t>(y) * frame_stride;
-			for (long x = 0; x < video_width; x++)
-			{
-				img[y][x] = row[x * 2];
-			}
-		}
-	}
-
-	void populate_matrix(dlib::matrix<float>& m) const
-	{
-		const auto video_width = std::min<long>(m.nc(), frame_width);
-		const auto video_height = std::min<long>(m.nr(), frame_height);
-
-		for (long y = 0; y < video_height; y++)
-		{
-			const byte* row = frame_buffer.data() + static_cast<size_t>(y) * frame_stride;
-			for (long x = 0; x < video_width; x++)
-			{
-				m(y, x) = row[x * 2] / 255.0f;
-			}
-		}
-	}
-
-	void populate_edge_matrix(dlib::matrix<float>& m) const
-	{
-		const auto video_width = std::min<long>(m.nc(), frame_width);
-		const auto video_height = std::min<long>(m.nr(), frame_height);
-
-		dlib::array2d<unsigned char> img(video_height, video_width);
-		populate_array2d(img);
-
-		dlib::array2d<unsigned char> blurred_img;
-		dlib::gaussian_blur(img, blurred_img);
-
-		dlib::array2d<short> horz_gradient, vert_gradient;
-		dlib::array2d<unsigned char> edge_image;
-		dlib::sobel_edge_detector(blurred_img, horz_gradient, vert_gradient);
-
-		dlib::suppress_non_maximum_edges(horz_gradient, vert_gradient, edge_image);
-
-		for (long y = 0; y < video_height; y++)
-		{
-			for (long x = 0; x < video_width; x++)
-			{
-				m(y, x) = (255 - edge_image[y][x]) / 255.0f;
-			}
-		}
-	}
-
-	void populate_grayscale_frame(byte* frame, const long width, const long height) const
-	{
-		const auto video_width = std::min(width, frame_width);
-		const auto video_height = std::min(height, frame_height);
-
-		for (long y = 0; y < video_height; y++)
-		{
-			const byte* row = frame_buffer.data() + static_cast<size_t>(y) * frame_stride;
-			for (long x = 0; x < video_width; x++)
-			{
-				frame[y * width + x] = row[x * 2];
-			}
-		}
-	}
-
-	void populate_rgb_frame(byte* frame, const long width, const long height) const
-	{
-		auto video_width = std::min(width, frame_width);
-		const auto video_height = std::min(height, frame_height);
-		// Round down to an even count: YUY2 macropixels carry 2 luma samples.
-		video_width &= ~1L;
-
-		for (long y = 0; y < video_height; y++)
-		{
-			const byte* row = frame_buffer.data() + static_cast<size_t>(y) * frame_stride;
-			for (long x = 0; x < video_width; x += 2)
-			{
-				const auto j = (y * width * 4) + (x * 4);
-
-				const float y1 = row[x * 2];
-				const float u = row[x * 2 + 1];
-				const float y2 = row[x * 2 + 2];
-				const float v = row[x * 2 + 3];
-
-				frame[j + 2] = get_red(y1, u, v);
-				frame[j + 1] = get_green(y1, u, v);
-				frame[j + 0] = get_blue(y1, u, v);
-				frame[j + 3] = 0;
-
-				frame[j + 6] = get_red(y2, u, v);
-				frame[j + 5] = get_green(y2, u, v);
-				frame[j + 4] = get_blue(y2, u, v);
-				frame[j + 7] = 0;
-			}
-		}
-	}
-
-	static int get_red(const float y, float u, const float v)
-	{
-		const float px = 1.164f * (y - 16.0f) + 1.596f * (v - 128.0f);
-		if (px < 0) return 0;
-		if (px > 255) return 255;
-		return static_cast<int>(px);
-	}
-
-	static int get_green(const float y, const float u, const float v)
-	{
-		const float px = 1.164f * (y - 16.0f) - 0.813f * (v - 128.0f) - 0.391f * (u - 128.0f);
-		if (px < 0) return 0;
-		if (px > 255) return 255;
-		return static_cast<int>(px);
-	}
-
-	static int get_blue(const float y, const float u, float v)
-	{
-		const float px = 1.164f * (y - 16.0f) + 2.018f * (u - 128.0f);
-		if (px < 0) return 0;
-		if (px > 255) return 255;
-		return static_cast<int>(px);
-	}
-};
-
-class frame_rate
-{
-	static constexpr int MAXSAMPLES = 30;
-
-	ULONGLONG tick_last = 0;
-	bool initialized = false;
-	int tickindex = 0;
-	int sample_count = 0;
-	double ticksum = 0;
-	double ticklist[MAXSAMPLES] = {};
-	double current_fps = 0;
-
-public:
-	frame_rate() = default;
-
-	void tick()
-	{
-		const ULONGLONG tick = GetTickCount64();
-		if (!initialized)
-		{
-			tick_last = tick;
-			initialized = true;
-			return;
-		}
-		double delta = static_cast<double>(tick - tick_last);
-		if (delta <= 0) delta = 1.0;
-		current_fps = 1000.0 / average_tick(delta);
-		tick_last = tick;
-	}
-
-	double val() const
-	{
-		return current_fps;
-	}
-
-private:
-	double average_tick(const double newtick)
-	{
-		ticksum -= ticklist[tickindex];
-		ticksum += newtick;
-		ticklist[tickindex] = newtick;
-
-		if (++tickindex == MAXSAMPLES)
-			tickindex = 0;
-
-		if (sample_count < MAXSAMPLES)
-			++sample_count;
-
-		return ticksum / sample_count;
-	}
-};
-
-using BITMAPINFO2 = struct tagBITMAPINFO2
-{
-	BITMAPINFOHEADER bmiHeader;
-	RGBQUAD bmiColors[256];
-};
-
-using LOGPALETTE2 = struct tagLOGPALETTE2
-{
-	WORD palVersion;
-	WORD palNumEntries;
-	PALETTEENTRY palPalEntry[256];
-};
-
-constexpr long video_width = 640;
-constexpr long video_height = 480;
-
-// Autoencoder operates at full webcam resolution. The 10x10 strided conv keeps total MACs
-// modest (~5M per forward pass) while giving the transposed conv head a large enough kernel
-// to produce smooth-looking reconstructions even with very little training.
-constexpr int ae_xy = 10; // conv kernel size at the down/up sample stages
-constexpr int ae_stride = 10; // stride matching the kernel (non-overlapping)
-constexpr int ae_bottleneck_channels = 4; // wire-format channels at the bottleneck
-constexpr int ae_replay_capacity = 8; // mini-batch size for training stability
-
-frame_rate video_fps;
-frame_rate frame_fps;
-
-// Mutex protects the shared_ptr swaps for current_frame, face_frame and face_det_frame.
-// shared_ptr's control block is thread-safe, but the slot itself is not.
-std::mutex current_frame_mutex;
-std::shared_ptr<yuv_frame> current_frame;
-
-static std::shared_ptr<yuv_frame> load_current_frame()
-{
-	std::lock_guard<std::mutex> guard(current_frame_mutex);
-	return current_frame;
-}
-
-static void store_current_frame(std::shared_ptr<yuv_frame> f)
-{
-	std::lock_guard<std::mutex> guard(current_frame_mutex);
-	current_frame = std::move(f);
-}
-
-// Mirrors the original demo network: one strided conv encoder, a 1x1 channel-mix, and a
-// matching transposed conv decoder. The 10x10 kernel is large enough that even minimal
-// training produces smooth reconstructions; the sig head bounds the output to [0,1] so
-// the per-pixel MSE loss can converge without us having to clamp at display.
-using ae_net_type = dlib::loss_mean_squared_per_pixel<
-	dlib::sig<dlib::cont<1, ae_xy, ae_xy, ae_stride, ae_stride,
-	                     dlib::relu<dlib::con<16, 1, 1, 1, 1,
-	                                          dlib::relu<dlib::con<
-		                                          ae_bottleneck_channels, ae_xy, ae_xy, ae_stride, ae_stride,
-		                                          dlib::input<dlib::matrix<float>>
-	                                          >>>>>>>;
-
-ae_net_type ae_net;
-
-std::vector<dlib::rectangle> face_rects;
-std::vector<dlib::full_object_detection> face_shapes;
-std::shared_ptr<yuv_frame> face_frame;
-dlib::array2d<unsigned char> face_pyramid;
-std::vector<dlib::rectangle> face_dets;
-std::shared_ptr<yuv_frame> face_det_frame;
-
-std::atomic<float> face_scal_x{1.0f};
-std::atomic<float> face_scal_y{1.0f};
-
-std::mutex frame_mutex;
-std::mutex face_mutex;
-
-// Crops every input matrix to (nr, nc) so it lines up with the autoencoder output dimensions.
-// Kept for the rare case where the network output dims differ from the input; the current
-// architecture preserves input dims so callers can usually skip this entirely.
-std::vector<dlib::matrix<float>> crop_data(const long nr, const long nc, const std::vector<dlib::matrix<float>>& input)
-{
-	std::vector<dlib::matrix<float>> results;
-	results.reserve(input.size());
-
-	for (const auto& m : input)
-	{
-		const long r = std::min<long>(nr, m.nr());
-		const long c = std::min<long>(nc, m.nc());
-		dlib::matrix<float> out(nr, nc);
-		out = 0;
-
-		for (long y = 0; y < r; y++)
-		{
-			for (long x = 0; x < c; x++)
-			{
-				out(y, x) = m(y, x);
-			}
-		}
-
-		results.emplace_back(std::move(out));
-	}
-
-	return results;
-}
-
-// Read a yuv_frame's luma into the autoencoder input matrix at full resolution.
-static void populate_ae_input(const yuv_frame& frame, dlib::matrix<float>& m)
-{
-	frame.populate_matrix(m);
-}
-
-std::atomic<int> training_step{0};
-
-void perform_training()
-{
-	ae_net_type net;
-	const dlib::sgd defsolver(0, 0.9);
-	dlib::dnn_trainer<ae_net_type> trainer(net, defsolver);
-	trainer.set_learning_rate(0.025);
-	trainer.be_quiet();
-
-	// Small replay buffer so each training step sees a mini-batch instead of a single frame.
-	// This stabilizes the per-pixel MSE gradient compared to one-frame online SGD.
-	std::vector<dlib::matrix<float>> replay;
-	replay.reserve(ae_replay_capacity);
-	size_t replay_write_idx = 0;
-
-	while (!exit_app)
-	{
-		if (frame_mode == frame_mode_t::autoencoder)
-		{
-			auto frame = load_current_frame();
-
-			if (frame != nullptr)
-			{
-				dlib::matrix<float> m(video_height, video_width);
-				populate_ae_input(*frame, m);
-
-				if (replay.size() < ae_replay_capacity)
-				{
-					replay.emplace_back(std::move(m));
-				}
-				else
-				{
-					replay[replay_write_idx] = std::move(m);
-					replay_write_idx = (replay_write_idx + 1) % ae_replay_capacity;
-				}
-
-				// Output dims match input dims for this architecture, so target == input.
-				trainer.train_one_step(replay, replay);
-
-				{
-					std::lock_guard<std::mutex> guard(frame_mutex);
-					ae_net = trainer.get_net();
-					++training_step;
-					invalidate = true;
-				}
-			}
-		}
-		else
-		{
-			Sleep(100);
-		}
-
-		Sleep(0);
-	}
-}
-
-void perform_face_detect()
-{
-	//auto face_detector = dlib::get_frontal_face_detector();
-
-	using pyr_t = dlib::pyramid_down<6>;
-	using frontal_face_detector = dlib::object_detector<dlib::scan_fhog_pyramid<pyr_t>>;
-
-	frontal_face_detector face_detector;
-
-	{
-		std::istringstream sin(dlib::get_serialized_frontal_faces());
-		dlib::deserialize(face_detector, sin);
-	}
-
-	dlib::array2d<unsigned char> img(video_height, video_width);
-	dlib::array2d<unsigned char> pyramid;
-
-	// Compile Dlib in Release Mode with Optimizations turned on
-	// https://www.learnopencv.com/speeding-up-dlib-facial-landmark-detector/
-
-	while (!exit_app)
-	{
-		if (show_facedetect)
-		{
-			auto frame = load_current_frame();
-
-			if (frame != nullptr)
-			{
-				frame->populate_array2d(img);
-
-				pyr_t pyr;
-				dlib::pyramid_up(img, pyramid, pyr);
-
-				face_scal_x.store(video_width / static_cast<float>(pyramid.nc()), std::memory_order_relaxed);
-				face_scal_y.store(video_height / static_cast<float>(pyramid.nr()), std::memory_order_relaxed);
-
-				auto dets = face_detector(pyramid);
-				//std::vector<dlib::rectangle> dets;
-
-				if (show_facelandmark)
-				{
-					std::lock_guard<std::mutex> guard(face_mutex);
-					std::swap(face_pyramid, pyramid);
-					std::swap(face_dets, dets);
-					std::swap(face_det_frame, frame);
-				}
-				else
-				{
-					frame_fps.tick();
-
-					{
-						std::lock_guard<std::mutex> guard(frame_mutex);
-						std::swap(face_rects, dets);
-						std::swap(face_frame, frame);
-						face_shapes.clear();
-					}
-
-					invalidate = true;
-				}
-			}
-		}
-		else
-		{
-			Sleep(100);
-		}
-
-		Sleep(0);
-	}
-}
-
-void perform_face_landmark()
-{
-	dlib::shape_predictor sp;
-
-	// Training data here
-	// http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
-	dlib::deserialize("shape_predictor_68_face_landmarks.dat") >> sp;
-
-	while (!exit_app)
-	{
-		if (show_facelandmark)
-		{
-			dlib::array2d<unsigned char> pyramid;
-			std::vector<dlib::rectangle> dets;
-			std::shared_ptr<yuv_frame> frame;
-
-			{
-				std::lock_guard<std::mutex> guard(face_mutex);
-				std::swap(face_pyramid, pyramid);
-				std::swap(face_dets, dets);
-				std::swap(face_det_frame, frame);
-			}
-
-			if (frame != nullptr)
-			{
-				std::vector<dlib::full_object_detection> shapes;
-
-				for (const auto& d : dets)
-				{
-					auto shape = sp(pyramid, d);
-					shapes.emplace_back(shape);
-				}
-
-				frame_fps.tick();
-
-				{
-					std::lock_guard<std::mutex> guard(frame_mutex);
-					std::swap(face_rects, dets);
-					std::swap(face_shapes, shapes);
-					std::swap(face_frame, frame);
-					invalidate = true;
-				}
-			}
-			else
-			{
-				Sleep(10);
-			}
-		}
-		else
-		{
-			Sleep(100);
-		}
-	}
-}
-
-void plot(const frame_buffer& frame, const int x, const int y, const double c)
-{
-	//x coord, y coord, intensity c.
-	if (x < 0 || x + 1 >= frame.width) return;
-	if (y < 0 || y >= frame.height) return;
-
-	const auto bg0 = frame.pixels[y * frame.width + x + 1] / 255.0;
-	const auto cc0 = c + bg0 * (1.0 - c);
-	frame.pixels[y * frame.width + x + 1] = static_cast<byte>(cc0 * 255);
-
-	const auto bg1 = frame.pixels[y * frame.width + x] / 255.0;
-	const auto cc1 = ((1.0 - c) + bg1 * c);
-	frame.pixels[y * frame.width + x] = static_cast<byte>(cc1 * 255);
-}
-
-void plot_steep(const frame_buffer& frame, const int x, const int y, const double c)
-{
-	//Similar to above function, swaps the order that the pixels are set.
-	if (x < 0 || x >= frame.width) return;
-	if (y < 0 || y + 1 >= frame.height) return;
-
-	const auto bg0 = frame.pixels[y * frame.width + x] / 255.0;
-	const auto cc0 = c + bg0 * (1.0 - c);
-	frame.pixels[(y + 1) * frame.width + x] = static_cast<byte>(cc0 * 255);
-
-	const auto bg1 = frame.pixels[y * frame.width + x] / 255.0;
-	const auto cc1 = ((1.0 - c) + bg1 * c);
-	frame.pixels[y * frame.width + x] = static_cast<byte>(cc1 * 255);
-}
-
-void draw_line(const frame_buffer& frame, int x0, int y0, int x1, int y1)
-{
-	/*Wu's Line drawing algorithm and pseudocode obtained from Wikipedia:
-	  http://en.wikipedia.org/wiki/Xiaolin_Wu%27s_line_algorithm
-
-	  We are drawing a line from lineStart to lineEnd with RGBColor color*/
-	const bool steep = (abs(y1 - y0) > abs(x1 - x0)); /*Determine whether the algorithm can be run normally,
-	Or if it needs to be run with x and y swapped.*/
-
-	if (steep)
-	{
-		std::swap(x0, y0);
-		std::swap(x1, y1);
-	}
-	if (x0 > x1) //Determine whether to run the algorithm right to left, or left to right.
-	{
-		std::swap(x0, x1);
-		std::swap(y0, y1);
-	}
-
-	const double dx = x1 - x0; //Find the distance in the x-axis
-	const double dy = y1 - y0; //Find distance in the y-axis
-
-	const double slope = dy / dx;
-	double yy = y0 + slope;
-
-	for (int x = x0; x < x1; x++) //Main loop, plot every point along the line.
-	{
-		if (steep)
-		{
-			double y;
-			const double frac = modf(yy, &y);
-			plot(frame, static_cast<int>(y), x, frac);
-		}
-		else
-		{
-			double y;
-			const double frac = modf(yy, &y);
-			plot_steep(frame, x, static_cast<int>(y), frac);
-		}
-		yy += slope;
-	}
-}
-
-void draw_line_segment(const frame_buffer& frame, const dlib::full_object_detection& d, const int start, const int end,
-                       const bool isClosed = false)
-{
-	const float sx = face_scal_x.load(std::memory_order_relaxed);
-	const float sy = face_scal_y.load(std::memory_order_relaxed);
-
-	for (int i = start; i < end; ++i)
-	{
-		const auto x1 = d.part(i).x() * sx;
-		const auto y1 = d.part(i).y() * sy;
-		const auto x2 = d.part(i + 1).x() * sx;
-		const auto y2 = d.part(i + 1).y() * sy;
-		draw_line(frame, static_cast<int>(x1), static_cast<int>(y1), static_cast<int>(x2), static_cast<int>(y2));
-	}
-
-	if (isClosed)
-	{
-		const auto x1 = d.part(end).x() * sx;
-		const auto y1 = d.part(end).y() * sy;
-		const auto x2 = d.part(start).x() * sx;
-		const auto y2 = d.part(start).y() * sy;
-		draw_line(frame, static_cast<int>(x1), static_cast<int>(y1), static_cast<int>(x2), static_cast<int>(y2));
-	}
-}
-
-void render_face(const frame_buffer& frame, const dlib::full_object_detection& d)
-{
-	if (d.num_parts() == 68)
-	{
-		draw_line_segment(frame, d, 0, 16); // Jaw line
-		draw_line_segment(frame, d, 17, 21); // Left eyebrow
-		draw_line_segment(frame, d, 22, 26); // Right eyebrow
-		draw_line_segment(frame, d, 27, 30); // Nose bridge
-		draw_line_segment(frame, d, 30, 35, true); // Lower nose
-		draw_line_segment(frame, d, 36, 41, true); // Left eye
-		draw_line_segment(frame, d, 42, 47, true); // Right Eye
-		draw_line_segment(frame, d, 48, 59, true); // Outer lip
-		draw_line_segment(frame, d, 60, 67, true); // Inner lip
-	}
-}
-
-
-void render_rgb_frame(const HDC hdc, const int x, const int y, const int width, const int height, const byte* frame)
-{
-	BITMAPINFO bm;
-	bm.bmiHeader.biSize = sizeof(bm.bmiHeader);
-	bm.bmiHeader.biWidth = width;
-	bm.bmiHeader.biHeight = -static_cast<long>(height);
-	bm.bmiHeader.biPlanes = 1;
-	bm.bmiHeader.biBitCount = 32;
-	bm.bmiHeader.biCompression = BI_RGB;
-	bm.bmiHeader.biSizeImage = width * height * 4; // buffCurrLen;
-	bm.bmiHeader.biXPelsPerMeter = 0;
-	bm.bmiHeader.biYPelsPerMeter = 0;
-	bm.bmiHeader.biClrUsed = 0;
-	bm.bmiHeader.biClrImportant = 0;
-
-	SetDIBitsToDevice(hdc, x, y, width, height, 0, 0, 0, height, frame, &bm, DIB_RGB_COLORS);
-}
-
-void render_grayscale_frame(const HDC hdc, const int x, const int y, const int width, const int height,
-                            const byte* frame)
-{
-	static BITMAPINFO2 gbm = []
-	{
-		BITMAPINFO2 b{};
-		b.bmiHeader.biSize = sizeof(b.bmiHeader);
-		b.bmiHeader.biPlanes = 1;
-		b.bmiHeader.biBitCount = 8;
-		b.bmiHeader.biCompression = BI_RGB;
-		b.bmiHeader.biClrUsed = 256;
-		for (int i = 0; i < 256; i++)
-		{
-			b.bmiColors[i].rgbBlue = static_cast<BYTE>(i);
-			b.bmiColors[i].rgbGreen = static_cast<BYTE>(i);
-			b.bmiColors[i].rgbRed = static_cast<BYTE>(i);
-			b.bmiColors[i].rgbReserved = 0;
-		}
-		return b;
-	}();
-
-	static HPALETTE hpal = []
-	{
-		LOGPALETTE2 pal{};
-		pal.palVersion = 0x300;
-		pal.palNumEntries = 256;
-		for (int i = 0; i < 256; i++)
-		{
-			pal.palPalEntry[i].peBlue = static_cast<BYTE>(i);
-			pal.palPalEntry[i].peGreen = static_cast<BYTE>(i);
-			pal.palPalEntry[i].peRed = static_cast<BYTE>(i);
-			pal.palPalEntry[i].peFlags = 0;
-		}
-		return CreatePalette(reinterpret_cast<LPLOGPALETTE>(&pal));
-	}();
-
-	gbm.bmiHeader.biWidth = width;
-	gbm.bmiHeader.biHeight = -height;
-	gbm.bmiHeader.biSizeImage = width * height;
-
-	const auto old_hpal = SelectPalette(hdc, hpal, FALSE);
-	RealizePalette(hdc);
-
-	SetDIBitsToDevice(hdc, x, y, width, height, 0, 0, 0, height, frame, reinterpret_cast<BITMAPINFO*>(&gbm),
-	                  DIB_PAL_COLORS);
-
-	SelectPalette(hdc, old_hpal, FALSE);
-}
-
-void contrast_stretch_grayscale_frame(const frame_buffer& frame)
-{
-	constexpr int OUT_MIN = 0; // The desired min output luminosity 0   to stretch to entire spectrum
-	constexpr int OUT_MAX = 255; // The desired max output luminosity 255 to stretch to entire spectrum
-
-	int cmin = OUT_MAX;
-	int cmax = OUT_MIN;
-
-	for (int y = 0; y < frame.height; y++)
-	{
-		for (int x = 0; x < frame.width; x++)
-		{
-			int c = frame.pixels[y * frame.width + x];
-			cmin = cmin < c ? cmin : c;
-			cmax = cmax > c ? cmax : c;
-		}
-	}
-
-	const int range = cmax - cmin;
-	if (range <= 0) return; // uniform frame: nothing to stretch
-
-	for (int y = 0; y < frame.height; y++)
-	{
-		for (int x = 0; x < frame.width; x++)
-		{
-			const int c = frame.pixels[y * frame.width + x];
-			int cc = MulDiv(c - cmin, OUT_MAX - OUT_MIN, range) + OUT_MIN;
-			cc = cc < OUT_MIN ? OUT_MIN : cc;
-			cc = cc > OUT_MAX ? OUT_MAX : cc;
-			frame.pixels[y * frame.width + x] = static_cast<byte>(cc);
-		}
-	}
-}
-
-int calc_bitrate(const int num_faces, const double fps)
-{
-	double result = 0.0;
-
-	if (frame_mode == frame_mode_t::autoencoder)
-	{
-		// True bottleneck size: ae_bottleneck_channels at (video_w/ae_xy) x (video_h/ae_xy),
-		// quantized to 1 byte/channel across the wire.
-		result = (static_cast<double>(video_width / ae_stride) * (video_height / ae_stride)
-			* ae_bottleneck_channels * 8.0 * fps) / 1000.0;
-	}
-	else if (frame_mode == frame_mode_t::edgedetect)
-	{
-		// 1 byte grayscale, assume typical H.264 compression ratio
-		result = (static_cast<double>(video_width) * video_height * 8.0 * fps * 0.05) / 1000.0;
-	}
-	else
-	{
-		// 10x smaller frame, uncompressed 1 byte grayscale
-		result = (static_cast<double>(video_width / 10) * (video_height / 10) * 8.0 * fps) / 1000.0;
-	}
-
-	result += static_cast<double>(num_faces) * 68.0 * sizeof(short) * 2.0 * 8.0 * fps / 1000.0; // 68 points per face
-
-	return static_cast<int>(result);
-}
-
-void on_paint(const HDC hdc, const RECT& clientBounds)
-{
-	const auto layout_padding = 10;
-	const auto layout_bottom = clientBounds.bottom;
-	const auto layout_y = (layout_bottom - video_height) / 2;
-	const auto layout_x1 = (clientBounds.left + clientBounds.right - video_width - video_width - layout_padding) / 2;
-	const auto layout_x2 = layout_x1 + video_width + layout_padding;
-
-	//
-	//
-	// Draw the title
-	//
-	//
-
-	static HFONT font = CreateFont(48, 0, 0, 0, FW_NORMAL,
-	                               FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-	                               OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-	                               DEFAULT_PITCH | FF_DONTCARE,
-	                               L"Segoe UI");
-
-	static HFONT font_title = CreateFont(64, 0, 0, 0, FW_NORMAL,
-	                                     FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-	                                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-	                                     DEFAULT_PITCH | FF_DONTCARE,
-	                                     L"Segoe UI");
-
-	SetTextColor(hdc, RGB(200, 200, 200));
-	SetBkMode(hdc, TRANSPARENT);
-	SelectObject(hdc, font_title);
-
-	const auto title1 = L"Low bandwidth video with face landmarking";
-	const auto tcy = layout_y / 3;
-
-	SIZE title_extent;
-	GetTextExtentPoint32(hdc, title1, static_cast<int>(wcslen(title1)), &title_extent);
-	auto title_y = layout_padding + (tcy - title_extent.cy) / 2;
-	TextOut(hdc, (clientBounds.right - title_extent.cx) / 2, layout_padding + (tcy - title_extent.cy) / 2, title1,
-	        static_cast<int>(wcslen(title1)));
-
-	SelectObject(hdc, font);
-
-	//
-	//
-	// Draw Face detected frames
-	//
-	//
-
-	const auto frame1 = load_current_frame();
-
-	if (frame1 != nullptr)
-	{
-		static byte rgb_frame[video_width * video_height * 4];
-		frame1->populate_rgb_frame(rgb_frame, video_width, video_height);
-		render_rgb_frame(hdc, layout_x1, layout_y, video_width, video_height, rgb_frame);
-	}
-
-	auto face_count = 0;
-	std::shared_ptr<yuv_frame> frame2;
-	if (show_facedetect)
-	{
-		std::lock_guard<std::mutex> guard(frame_mutex);
-		frame2 = face_frame;
-	}
-	else
-	{
-		frame2 = frame1;
-	}
-
-	if (frame2 != nullptr)
-	{
-		dlib::matrix<float> m(video_height, video_width);
-
-		if (frame_mode == frame_mode_t::autoencoder)
-		{
-			frame2->populate_matrix(m);
-
-			// Snapshot the network under the lock and run the forward pass without holding it.
-			ae_net_type local_net;
-			{
-				std::lock_guard<std::mutex> guard(frame_mutex);
-				local_net = ae_net;
-			}
-			dlib::matrix<float> transformed = local_net(m);
-
-			const long out_w = std::min<long>(transformed.nc(), video_width);
-			const long out_h = std::min<long>(transformed.nr(), video_height);
-			for (long y = 0; y < out_h; y++)
-			{
-				for (long x = 0; x < out_w; x++)
-				{
-					m(y, x) = transformed(y, x);
-				}
-			}
-		}
-		else if (frame_mode == frame_mode_t::edgedetect)
-		{
-			frame2->populate_edge_matrix(m);
-		}
-		else
-		{
-			dlib::matrix<float> m_small(video_height / 10, video_width / 10);
-			frame2->populate_matrix(m);
-
-			dlib::resize_image(m, m_small);
-			dlib::resize_image(m_small, m);
-
-			//frame2->populate_grayscale_frame(grayscale_frame, video_width, video_height);
-		}
-
-		//dlib::equalize_histogram(m);
-
-		static byte grayscale_frame[video_width * video_height];
-
-		for (int y = 0; y < video_height; y++)
-		{
-			for (int x = 0; x < video_width; x++)
-			{
-				grayscale_frame[video_width * y + x] = static_cast<int>(m(y, x) * 255.0f);
-			}
-		}
-
-		if (!show_facedetect)
-		{
-			frame_fps.tick();
-		}
-
-		const frame_buffer frame = {grayscale_frame, video_width, video_height};
-		contrast_stretch_grayscale_frame(frame);
-
-		//
-		//
-		// Draw faces
-		//
-		//
-
-		if (show_facedetect)
-		{
-			std::vector<dlib::rectangle> rects;
-			std::vector<dlib::full_object_detection> shapes;
-
-			{
-				std::lock_guard<std::mutex> guard(frame_mutex);
-				rects = face_rects;
-				shapes = face_shapes;
-			}
-
-			if (show_facelandmark)
-			{
-				face_count = shapes.size();
-
-				for (const auto& s : shapes)
-				{
-					render_face(frame, s);
-				}
-			}
-			else
-			{
-				const float sx = face_scal_x.load(std::memory_order_relaxed);
-				const float sy = face_scal_y.load(std::memory_order_relaxed);
-				for (const auto& r : rects)
-				{
-					draw_line(frame, static_cast<int>(r.left() * sx), static_cast<int>(r.top() * sy),
-					          static_cast<int>(r.right() * sx), static_cast<int>(r.top() * sy));
-					draw_line(frame, static_cast<int>(r.right() * sx), static_cast<int>(r.top() * sy),
-					          static_cast<int>(r.right() * sx), static_cast<int>(r.bottom() * sy));
-					draw_line(frame, static_cast<int>(r.right() * sx), static_cast<int>(r.bottom() * sy),
-					          static_cast<int>(r.left() * sx), static_cast<int>(r.bottom() * sy));
-					draw_line(frame, static_cast<int>(r.left() * sx), static_cast<int>(r.bottom() * sy),
-					          static_cast<int>(r.left() * sx), static_cast<int>(r.top() * sy));
-				}
-			}
-		}
-
-		render_grayscale_frame(hdc, layout_x2, layout_y, video_width, video_height, grayscale_frame);
-	}
-
-
-	//
-	//
-	// Draw labels
-	//
-	//
-
-	SelectObject(hdc, font);
-
-	wchar_t sz[64];
-	const int hd_bitrate = static_cast<int>((video_width * video_height * 24.0 * video_fps.val() * 0.05) / 1000.0);
-	// estimate based on actual frame size and generic H.264
-	swprintf_s(sz, L"%0.1f fps     %d kbit/s", video_fps.val(), hd_bitrate);
-	TextOut(hdc, layout_x1, layout_y + video_height + layout_padding, sz, static_cast<int>(wcslen(sz)));
-
-	swprintf_s(sz, L"%0.1f fps     %d kbit/s     training %d steps", frame_fps.val(),
-	           calc_bitrate(face_count, frame_fps.val()),
-	           training_step.load());
-	TextOut(hdc, layout_x2, layout_y + video_height + layout_padding, sz, static_cast<int>(wcslen(sz)));
-}
-
-void on_timer(const HWND hwnd)
-{
-	if (pSourceReader)
-	{
-		CComPtr<IMFSample> videoSample;
-
-		static UINT32 frame_width = 0, frame_height = 0;
-		static INT32 frame_stride = 0; // signed: MF may return a negative stride for bottom-up buffers
-
-		DWORD streamIndex = 0, flags = 0;
-		LONGLONG llVideoTimeStamp = 0;
-
-		auto hr = pSourceReader->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &streamIndex, &flags,
-		                                    &llVideoTimeStamp, &videoSample);
-
-		if (SUCCEEDED(hr))
-		{
-			if (flags & MF_SOURCE_READERF_ENDOFSTREAM)
-			{
-				OutputDebugStringW(L"\tEnd of stream\n");
-			}
-			if (flags & MF_SOURCE_READERF_NEWSTREAM)
-			{
-				OutputDebugStringW(L"\tNew stream\n");
-			}
-			if (flags & MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED)
-			{
-				OutputDebugStringW(L"\tNative type changed\n");
-			}
-			if (flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED)
-			{
-				OutputDebugStringW(L"\tCurrent type changed\n");
-
-				CComPtr<IMFMediaType> videoType;
-				const auto hr2 = pSourceReader->GetCurrentMediaType(streamIndex, &videoType);
-
-				if (SUCCEEDED(hr2))
-				{
-					MFGetAttributeSize(videoType, MF_MT_FRAME_SIZE, &frame_width, &frame_height);
-					videoType->GetUINT32(MF_MT_DEFAULT_STRIDE, reinterpret_cast<UINT32*>(&frame_stride));
-				}
-			}
-
-			if (flags & MF_SOURCE_READERF_STREAMTICK)
-			{
-				OutputDebugStringW(L"\tStream tick\n");
-			}
-
-			if (frame_width == 0 || frame_height == 0)
-			{
-				CComPtr<IMFMediaType> videoType;
-				if (SUCCEEDED(pSourceReader->GetCurrentMediaType(streamIndex, &videoType)))
-				{
-					MFGetAttributeSize(videoType, MF_MT_FRAME_SIZE, &frame_width, &frame_height);
-					if (FAILED(videoType->GetUINT32(MF_MT_DEFAULT_STRIDE, reinterpret_cast<UINT32*>(&frame_stride))))
-					{
-						frame_stride = static_cast<INT32>(frame_width) * 2; // Default to YUY2 stride
-					}
-				}
-			}
-		}
-
-		if (SUCCEEDED(hr))
-		{
-			if (videoSample)
-			{
-				DWORD nCurrBufferCount = 0;
-				CComPtr<IMFMediaBuffer> pMediaBuffer;
-				DWORD nCurrLen = 0;
-
-				if (SUCCEEDED(hr))
-				{
-					hr = videoSample->GetBufferCount(&nCurrBufferCount);
-				}
-
-				if (SUCCEEDED(hr))
-				{
-					//hr = videoSample->ConvertToContiguousBuffer(&pMediaBuffer);
-					hr = videoSample->GetBufferByIndex(0, &pMediaBuffer);
-				}
-
-				if (SUCCEEDED(hr))
-				{
-					hr = pMediaBuffer->GetCurrentLength(&nCurrLen);
-				}
-
-				byte* frame_buffer = nullptr;
-				DWORD frame_buffer_len = 0;
-				//DWORD buffMaxLen = 0;
-
-				if (SUCCEEDED(hr))
-				{
-					hr = pMediaBuffer->Lock(&frame_buffer, nullptr, &frame_buffer_len);
-				}
-
-				if (SUCCEEDED(hr))
-				{
-					if (frame_buffer != nullptr)
-					{
-						store_current_frame(std::make_shared<yuv_frame>(frame_width, frame_height, frame_stride,
-						                                                frame_buffer, frame_buffer_len));
-						video_fps.tick();
-						invalidate = true;
-					}
-
-					pMediaBuffer->Unlock();
-				}
-			}
-		}
-	}
-
-	if (invalidate)
-	{
-		InvalidateRect(hwnd, nullptr, FALSE);
-		invalidate = false;
-	}
-}
-
-LRESULT CALLBACK wnd_proc(const HWND hWnd, const UINT message, const WPARAM wParam, const LPARAM lParam)
-{
-	static RECT clientBounds;
-	static HBITMAP hBitmapBackBuffer = nullptr;
-
-	switch (message)
-	{
-	case WM_COMMAND:
-		{
-			const auto wmId = LOWORD(wParam);
-			// Parse the menu selections:
-			switch (wmId)
-			{
-			case IDM_ABOUT:
-				DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, about_proc);
-				break;
-			case IDM_EDGEDETECT:
-				frame_mode = frame_mode_t::edgedetect;
-				InvalidateRect(hWnd, nullptr, FALSE);
-				break;
-			case IDM_AUTOENCODER:
-				frame_mode = frame_mode_t::autoencoder;
-				training_step = 0;
-				InvalidateRect(hWnd, nullptr, FALSE);
-				break;
-			case IDM_SCALE:
-				frame_mode = frame_mode_t::scale;
-				InvalidateRect(hWnd, nullptr, FALSE);
-				break;
-			case IDM_FACEDETECT:
-				show_facedetect = !show_facedetect;
-				InvalidateRect(hWnd, nullptr, FALSE);
-				break;
-			case IDM_FACELANDMARK:
-				show_facelandmark = !show_facelandmark;
-				InvalidateRect(hWnd, nullptr, FALSE);
-				break;
-			case IDM_EXIT:
-				DestroyWindow(hWnd);
-				break;
-			default:
-				return DefWindowProc(hWnd, message, wParam, lParam);
-			}
-		}
-		break;
-	case WM_INITMENUPOPUP:
-		{
-			const auto hmenu = (HMENU)wParam;
-			const auto uPos = static_cast<UINT>(LOWORD(lParam));
-			const auto fSystemMenu = static_cast<BOOL>(HIWORD(lParam));
-
-			MENUITEMINFO mii = {sizeof(MENUITEMINFO),MIIM_STATE, 0, 0, 0, nullptr, nullptr, nullptr, 0, nullptr, 0};
-			mii.fState = frame_mode == frame_mode_t::edgedetect ? MFS_CHECKED : MFS_UNCHECKED;
-			SetMenuItemInfo(hmenu, IDM_EDGEDETECT, FALSE, &mii);
-			mii.fState = frame_mode == frame_mode_t::autoencoder ? MFS_CHECKED : MFS_UNCHECKED;
-			SetMenuItemInfo(hmenu, IDM_AUTOENCODER, FALSE, &mii);
-			mii.fState = frame_mode == frame_mode_t::scale ? MFS_CHECKED : MFS_UNCHECKED;
-			SetMenuItemInfo(hmenu, IDM_SCALE, FALSE, &mii);
-			mii.fState = show_facedetect ? MFS_CHECKED : MFS_UNCHECKED;
-			SetMenuItemInfo(hmenu, IDM_FACEDETECT, FALSE, &mii);
-			mii.fState = show_facelandmark ? MFS_CHECKED : MFS_UNCHECKED;
-			SetMenuItemInfo(hmenu, IDM_FACELANDMARK, FALSE, &mii);
-		}
-		break;
-
-	case WM_CREATE:
-	case WM_SIZE:
-		{
-			if (hBitmapBackBuffer) DeleteObject(hBitmapBackBuffer);
-			GetClientRect(hWnd, &clientBounds);
-			const auto hdc = GetDC(hWnd);
-			hBitmapBackBuffer = CreateCompatibleBitmap(hdc, clientBounds.right, clientBounds.bottom);
-			ReleaseDC(hWnd, hdc);
+			break;
+		default:
 			break;
 		}
-
-	case WM_ERASEBKGND:
-		return 1;
-
-	case WM_PAINT:
-		{
-			PAINTSTRUCT ps;
-			const HDC hdc = BeginPaint(hWnd, &ps);
-
-			const auto hdcBackBuffer = CreateCompatibleDC(hdc);
-			const auto oldBitmap = SelectObject(hdcBackBuffer, hBitmapBackBuffer);
-			FillRect(hdcBackBuffer, &ps.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-			on_paint(hdcBackBuffer, clientBounds);
-			BitBlt(hdc, 0, 0, clientBounds.right, clientBounds.bottom, hdcBackBuffer, 0, 0, SRCCOPY);
-			SelectObject(hdcBackBuffer, oldBitmap);
-			DeleteObject(hdcBackBuffer);
-			EndPaint(hWnd, &ps);
-		}
-		break;
-	case WM_DESTROY:
-		KillTimer(hWnd, 99);
-		if (hBitmapBackBuffer)
-		{
-			DeleteObject(hBitmapBackBuffer);
-			hBitmapBackBuffer = nullptr;
-		}
-		PostQuitMessage(0);
-		break;
-	case WM_TIMER:
-		on_timer(hWnd);
-		break;
-	default:
-		return DefWindowProc(hWnd, message, wParam, lParam);
-	}
-	return 0;
-}
-
-
-ATOM register_wnd_class(const HINSTANCE hInstance)
-{
-	WNDCLASSEXW wcex;
-
-	wcex.cbSize = sizeof(WNDCLASSEX);
-
-	wcex.style = CS_HREDRAW | CS_VREDRAW;
-	wcex.lpfnWndProc = wnd_proc;
-	wcex.cbClsExtra = 0;
-	wcex.cbWndExtra = 0;
-	wcex.hInstance = hInstance;
-	wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP));
-	wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-	wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-	wcex.lpszMenuName = MAKEINTRESOURCEW(IDC_APP);
-	wcex.lpszClassName = szWindowClass;
-	wcex.hIconSm = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_APP));
-
-	return RegisterClassExW(&wcex);
-}
-
-BOOL init_instance(const HINSTANCE hInstance, const int nCmdShow)
-{
-	register_wnd_class(hInstance);
-
-	hInst = hInstance; // Store instance handle in our global variable
-
-	hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr,
-	                     nullptr, hInstance, nullptr);
-
-	if (!hWnd)
-	{
 		return FALSE;
 	}
 
-	ShowWindow(hWnd, nCmdShow);
-	UpdateWindow(hWnd);
-
-	return TRUE;
-}
-
-std::map<std::wstring, CComPtr<IMFActivate>> list_cameras()
-{
-	std::map<std::wstring, CComPtr<IMFActivate>> results;
-
-	IMFActivate** ppDevices = nullptr;
-	UINT32 nCount = 0;
-	WCHAR* pszFriendlyName = nullptr;
-	UINT32 cchName = 0;
-	CComPtr<IMFAttributes> pAttributes;
-
-	auto hr = MFCreateAttributes(&pAttributes, 1);
-
-	if (SUCCEEDED(hr))
+	void on_paint(const HDC hdc, const RECT& bounds)
 	{
-		hr = pAttributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
-	}
+		static const HFONT title_font = CreateFontW(48, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+		                                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+		                                            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+		static const HFONT label_font = CreateFontW(28, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+		                                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+		                                            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-	if (SUCCEEDED(hr))
-	{
-		hr = MFEnumDeviceSources(pAttributes, &ppDevices, &nCount);
-	}
+		const int panes_width = video_width * 3 + layout_padding * 2;
+		const int left_x = (bounds.right - panes_width) / 2;
+		const int traditional_x = left_x + video_width + layout_padding;
+		const int neural_x = traditional_x + video_width + layout_padding;
+		const int pane_y = (bounds.bottom - video_height) / 2;
 
-	if (SUCCEEDED(hr))
-	{
-		for (UINT32 i = 0; i < nCount; i++)
+		SetTextColor(hdc, RGB(200, 200, 200));
+		SetBkMode(hdc, TRANSPARENT);
+
+		const HGDIOBJ previous_font = SelectObject(hdc, title_font);
+		draw_centred(hdc, bounds, std::max(layout_padding, pane_y / 3), L"Low bandwidth video with face landmarking");
+		SelectObject(hdc, label_font);
+
+		const auto state = pipeline.latest();
+		const double source_fps = pipeline.source_fps();
+
+		if (state)
 		{
-			const auto hr2 = ppDevices[i]->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &pszFriendlyName,
-			                                                  &cchName);
+			blit_colour(hdc, left_x, pane_y, state->width, state->height, state->source_bgra);
+			blit_grey(hdc, traditional_x, pane_y, state->traditional);
+			blit_grey(hdc, neural_x, pane_y, state->neural);
 
-			if (SUCCEEDED(hr2))
+			// Drawn over the source so detection can be judged separately from landmarking.
+			static const HPEN face_pen = CreatePen(PS_SOLID, 2, RGB(0, 220, 0));
+			const HGDIOBJ previous_pen = SelectObject(hdc, face_pen);
+			const HGDIOBJ previous_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+			for (const auto& face : state->faces)
 			{
-				results[pszFriendlyName] = ppDevices[i];
-				CoTaskMemFree(pszFriendlyName);
-				pszFriendlyName = nullptr;
+				Rectangle(hdc, left_x + face.left, pane_y + face.top,
+				          left_x + face.right + 1, pane_y + face.bottom + 1);
 			}
-		}
-	}
+			SelectObject(hdc, previous_brush);
+			SelectObject(hdc, previous_pen);
 
-	if (ppDevices)
-	{
-		for (UINT32 i = 0; i < nCount; i++)
+			// Reference figure for the raw camera feed under conventional compression.
+			const auto source_kbit = static_cast<int>(
+				state->width * state->height * 24.0 * source_fps * 0.05 / 1000.0);
+
+			wchar_t text[128];
+			swprintf_s(text, L"Original: %0.1f fps, %d kbit/s reference, %d faces (peak %0.2f)", source_fps,
+			           source_kbit, state->face_count, state->peak_confidence);
+			TextOutW(hdc, left_x, pane_y + video_height + layout_padding, text, static_cast<int>(wcslen(text)));
+
+			swprintf_s(text, L"Traditional wire: %0.1f kbit/s, PSNR %0.1f dB, face %0.1f dB, %s %d blocks",
+			           state->traditional_kbit_per_second, state->traditional_quality.psnr,
+			           state->traditional_quality.weighted_psnr,
+			           state->traditional_keyframe ? L"keyframe" : L"delta",
+			           state->traditional_updated_blocks);
+			TextOutW(hdc, traditional_x, pane_y + video_height + layout_padding, text,
+			         static_cast<int>(wcslen(text)));
+
+			swprintf_s(text, L"Neural wire: %0.1f kbit/s, PSNR %0.1f dB, face %0.1f dB, %s %d patches",
+			           state->neural_kbit_per_second, state->neural_quality.psnr,
+			           state->neural_quality.weighted_psnr, state->neural_keyframe ? L"keyframe" : L"delta",
+			           state->neural_updated_patches);
+			TextOutW(hdc, neural_x, pane_y + video_height + layout_padding, text,
+			         static_cast<int>(wcslen(text)));
+		}
+
+		const std::string status = pipeline.status();
+		if (!status.empty())
 		{
-			SafeRelease(&(ppDevices[i]));
+			const std::wstring wide(status.begin(), status.end());
+			SetTextColor(hdc, RGB(220, 120, 120));
+			draw_centred(hdc, bounds, bounds.bottom - 3 * layout_padding, wide.c_str());
 		}
-		CoTaskMemFree(ppDevices);
+
+		SelectObject(hdc, previous_font);
 	}
 
-	return results;
-}
-
-CComPtr<IMFMediaSource> select_device_source()
-{
-	auto cameras = list_cameras();
-
-	HRESULT hr = S_OK;
-	CComPtr<IMFMediaSource> result;
-
-	if (cameras.size() > 0)
+	LRESULT CALLBACK wnd_proc(const HWND wnd, const UINT message, const WPARAM wparam, const LPARAM lparam)
 	{
-		auto found = cameras.find(L"Logitech Webcam C930e");
-		if (found == cameras.end()) found = cameras.begin();
-		hr = found->second->ActivateObject(__uuidof(IMFMediaSource), (void**)&result);
+		static RECT client_bounds = {};
+		static HBITMAP back_buffer = nullptr;
+
+		switch (message)
+		{
+		case WM_COMMAND:
+			switch (LOWORD(wparam))
+			{
+			case IDM_ABOUT:
+				DialogBoxW(instance, MAKEINTRESOURCEW(IDD_ABOUTBOX), wnd, about_proc);
+				break;
+			case IDM_AUTOENCODER:
+				pipeline.reset_training();
+				break;
+			case IDM_FACEDETECT:
+				pipeline.set_show_faces(!pipeline.show_faces());
+				break;
+			case IDM_FACELANDMARK:
+				pipeline.set_show_landmarks(!pipeline.show_landmarks());
+				break;
+			case IDM_LANDMARKOVERLAY:
+				pipeline.set_show_overlay(!pipeline.show_overlay());
+				break;
+			case IDM_EXIT:
+				DestroyWindow(wnd);
+				break;
+			default:
+				return DefWindowProcW(wnd, message, wparam, lparam);
+			}
+			InvalidateRect(wnd, nullptr, FALSE);
+			break;
+
+		case WM_INITMENUPOPUP:
+			{
+				const auto menu = reinterpret_cast<HMENU>(wparam);
+				const auto check = [menu](const UINT id, const bool on)
+				{
+					MENUITEMINFOW info = {sizeof(MENUITEMINFOW), MIIM_STATE};
+					info.fState = on ? MFS_CHECKED : MFS_UNCHECKED;
+					SetMenuItemInfoW(menu, id, FALSE, &info);
+				};
+
+				check(IDM_FACEDETECT, pipeline.show_faces());
+				check(IDM_FACELANDMARK, pipeline.show_landmarks());
+				check(IDM_LANDMARKOVERLAY, pipeline.show_overlay());
+			}
+			break;
+
+		case WM_CREATE:
+		case WM_SIZE:
+			{
+				GetClientRect(wnd, &client_bounds);
+				if (back_buffer) DeleteObject(back_buffer);
+				back_buffer = nullptr;
+
+				if (client_bounds.right > 0 && client_bounds.bottom > 0)
+				{
+					const HDC hdc = GetDC(wnd);
+					back_buffer = CreateCompatibleBitmap(hdc, client_bounds.right, client_bounds.bottom);
+					ReleaseDC(wnd, hdc);
+				}
+			}
+			break;
+
+		case WM_ERASEBKGND:
+			return 1;
+
+		case WM_PAINT:
+			{
+				PAINTSTRUCT ps;
+				const HDC hdc = BeginPaint(wnd, &ps);
+
+				if (back_buffer)
+				{
+					const HDC buffer_dc = CreateCompatibleDC(hdc);
+					const HGDIOBJ previous = SelectObject(buffer_dc, back_buffer);
+					FillRect(buffer_dc, &client_bounds, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+					on_paint(buffer_dc, client_bounds);
+					BitBlt(hdc, 0, 0, client_bounds.right, client_bounds.bottom, buffer_dc, 0, 0, SRCCOPY);
+					SelectObject(buffer_dc, previous);
+					DeleteDC(buffer_dc);
+				}
+
+				EndPaint(wnd, &ps);
+			}
+			break;
+
+		case WM_TIMER:
+			if (pipeline.generation() != painted_generation)
+			{
+				painted_generation = pipeline.generation();
+				InvalidateRect(wnd, nullptr, FALSE);
+			}
+			break;
+
+		case WM_DESTROY:
+			KillTimer(wnd, refresh_timer);
+			if (back_buffer)
+			{
+				DeleteObject(back_buffer);
+				back_buffer = nullptr;
+			}
+			PostQuitMessage(0);
+			break;
+
+		default:
+			return DefWindowProcW(wnd, message, wparam, lparam);
+		}
+
+		return 0;
 	}
 
-	return FAILED(hr) ? nullptr : result;
-}
-
-int APIENTRY wWinMain(_In_ const HINSTANCE hInstance,
-                      _In_opt_ const HINSTANCE hPrevInstance,
-                      _In_ const LPWSTR lpCmdLine,
-                      _In_ const int nCmdShow)
-{
-	UNREFERENCED_PARAMETER(hPrevInstance);
-
-	if (lpCmdLine != nullptr && wcsstr(lpCmdLine, L"/test") != nullptr)
+	int run_console_mode(const bool evaluate)
 	{
 		if (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole())
 		{
-			FILE* fp;
-			freopen_s(&fp, "CONOUT$", "w", stdout);
-			freopen_s(&fp, "CONOUT$", "w", stderr);
+			FILE* stream = nullptr;
+			freopen_s(&stream, "CONOUT$", "w", stdout);
+			freopen_s(&stream, "CONOUT$", "w", stderr);
 		}
 
-		std::cout << "Running smoke test..." << std::endl;
-		try
-		{
-			dlib::shape_predictor sp;
-			dlib::deserialize("shape_predictor_68_face_landmarks.dat") >> sp;
-			std::cout << "Successfully loaded shape_predictor_68_face_landmarks.dat" << std::endl;
-			std::cout << "Smoke test passed." << std::endl;
-			return 0;
-		}
-		catch (const std::exception& e)
-		{
-			std::cerr << "Error: Failed to load shape_predictor_68_face_landmarks.dat: " << e.what() << std::endl;
-			return 1;
-		}
-		catch (...)
-		{
-			std::cerr << "Unknown error occurred during smoke test." << std::endl;
-			return 1;
-		}
+		return evaluate ? run_sample_evaluation() : run_self_test();
 	}
+}
 
-	UNREFERENCED_PARAMETER(lpCmdLine);
-
-	// Initialize global strings
-	LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
-	LoadStringW(hInstance, IDC_APP, szWindowClass, MAX_LOADSTRING);
-
-	// Perform application initialization:
-	if (!init_instance(hInstance, nCmdShow))
+int APIENTRY wWinMain(_In_ const HINSTANCE hinstance, _In_opt_ HINSTANCE, _In_ const LPWSTR command_line,
+                      _In_ const int show_command)
+{
+	if (command_line != nullptr && wcsstr(command_line, L"/test") != nullptr)
 	{
-		return FALSE;
+		return run_console_mode(false);
 	}
-
-	HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-	const bool com_initialized = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-	const HRESULT hr_mf = MFStartup(MF_VERSION);
-
-	MSG msg{};
-
+	if (command_line != nullptr && wcsstr(command_line, L"/evaluate") != nullptr)
 	{
-		const auto source = select_device_source();
-
-
-		CComPtr<IMFAttributes> pAttributes;
-		hr = MFCreateAttributes(&pAttributes, 1);
-
-		if (SUCCEEDED(hr))
-		{
-			hr = pAttributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
-		}
-
-		if (SUCCEEDED(hr) && source)
-		{
-			hr = MFCreateSourceReaderFromMediaSource(source, pAttributes, &pSourceReader);
-		}
-
-		if (SUCCEEDED(hr) && pSourceReader)
-		{
-			CComPtr<IMFMediaType> pType;
-			MFCreateMediaType(&pType);
-			pType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-			pType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_YUY2);
-			MFSetAttributeSize(pType, MF_MT_FRAME_SIZE, video_width, video_height);
-			pSourceReader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, pType);
-		}
-
-		std::thread t1, t2, t3;
-		if (pSourceReader)
-		{
-			t1 = std::thread(perform_training);
-			t2 = std::thread(perform_face_detect);
-			t3 = std::thread(perform_face_landmark);
-		}
-		else
-		{
-			OutputDebugStringW(L"low-ban: failed to initialize Media Foundation source reader\n");
-		}
-
-		const HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_APP));
-		SetTimer(hWnd, 99, 1000 / 20, nullptr);
-
-		// Main message loop:
-		while (GetMessage(&msg, nullptr, 0, 0))
-		{
-			if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
-			{
-				TranslateMessage(&msg);
-				DispatchMessage(&msg);
-			}
-		}
-
-		exit_app = true;
-		if (t1.joinable()) t1.join();
-		if (t2.joinable()) t2.join();
-		if (t3.joinable()) t3.join();
-
-		pSourceReader.Release();
-		if (source)
-		{
-			source->Shutdown();
-		}
+		return run_console_mode(true);
 	}
 
+	instance = hinstance;
 
-	if (SUCCEEDED(hr_mf)) MFShutdown();
-	if (com_initialized) CoUninitialize();
+	const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+	const bool com_ready = SUCCEEDED(com) || com == RPC_E_CHANGED_MODE;
+	const media_foundation media;
+
+	wchar_t title[128] = {};
+	wchar_t class_name[128] = {};
+	LoadStringW(hinstance, IDS_APP_TITLE, title, ARRAYSIZE(title));
+	LoadStringW(hinstance, IDC_APP, class_name, ARRAYSIZE(class_name));
+
+	WNDCLASSEXW wcex = {sizeof(WNDCLASSEXW)};
+	wcex.style = CS_HREDRAW | CS_VREDRAW;
+	wcex.lpfnWndProc = wnd_proc;
+	wcex.hInstance = hinstance;
+	wcex.hIcon = LoadIconW(hinstance, MAKEINTRESOURCEW(IDI_APP));
+	wcex.hIconSm = wcex.hIcon;
+	wcex.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+	wcex.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+	wcex.lpszMenuName = MAKEINTRESOURCEW(IDC_APP);
+	wcex.lpszClassName = class_name;
+	RegisterClassExW(&wcex);
+
+	const HWND wnd = CreateWindowW(class_name, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+	                               video_width * 3 + layout_padding * 8, video_height + 220, nullptr, nullptr,
+	                               hinstance, nullptr);
+	if (wnd == nullptr)
+	{
+		if (com_ready) CoUninitialize();
+		return 1;
+	}
+
+	pipeline.start(video_width, video_height);
+	ShowWindow(wnd, show_command);
+	UpdateWindow(wnd);
+	SetTimer(wnd, refresh_timer, 1000 / 60, nullptr);
+
+	MSG msg = {};
+	while (GetMessageW(&msg, nullptr, 0, 0))
+	{
+		TranslateMessage(&msg);
+		DispatchMessageW(&msg);
+	}
+
+	pipeline.stop();
+
+	if (com_ready) CoUninitialize();
 
 	return static_cast<int>(msg.wParam);
 }
