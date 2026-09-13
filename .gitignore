@@ -397,3 +397,8 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 *.exe
+
+# CMake / Ninja build output
+build/
+exe/
+intermediate/

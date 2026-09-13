@@ -1,0 +1,15 @@
+{
+  "multiConfig": false,
+  "root": "C:\\code\\apps\\low-ban",
+  "generator": "Ninja",
+  "files": {
+    "C:\\code\\apps\\low-ban\\CMakePresets.json": "0481D9FF83B50D33D851DCB28EB79E0B61AC7FFC9B4A301C15D07B0615EC353E"
+  },
+  "manifestHash": "90129EBAABEC20F2965BA230C0992B71B89534F1D59FFE93D1B812902199A823",
+  "directory": "C:\\code\\apps\\low-ban\\build\\debug",
+  "mapping": {
+    "build": "debug",
+    "test": "debug",
+    "configure": "debug"
+  }
+}
