@@ -394,22 +394,20 @@ excluded.
 
 ## Building and running
 
-`dd.ps1` locates MSBuild through `vswhere` and builds `low-ban.sln` for `x64`.
+For quick commands, see [README.md#building](../README.md#building). The exact verification
+gate for contributors is in [AGENTS.md#essentials](../AGENTS.md#essentials). `dd.ps1` is the
+vendored dd driver, and the `evaluate` project command is declared in `dd.psd1`.
 
 ```
-.\dd.ps1 build            # Debug
-.\dd.ps1 run              # Release, so the demo runs at full speed
-.\dd.ps1 test             # Debug
-.\dd.ps1 evaluate         # Debug, evaluate samples/*.png
-.\dd.ps1 clean
+.\dd.ps1 test --label low-ban
+.\dd.ps1 evaluate --yes
 ```
 
-Pass `-Config Debug` or `-Config Release` to override.
-
-`dd.ps1 test` runs the built executable with `/test`, which exercises everything that does
-not need a camera or a window, in six groups: image operations, YUY2 decoding including
-bottom-up buffers, drawing and clipping, the low bandwidth codecs, face detection, and the
-landmark model. Between them they cover transform ROI quality, autoencoder convergence, exact
+`dd.ps1 test --label low-ban` builds both configurations and runs the headless checks that do
+not need a camera or a window. They cover image operations, YUY2 decoding including bottom-up
+buffers, drawing and clipping, the low bandwidth codecs, face detection, the embedded
+manifest and the landmark model reader. Between them they cover transform ROI quality,
+autoencoder convergence, exact
 traditional and neural keyframe reconstruction, bounded sparse deltas,
 latent/transform/landmark corruption handling, complete 4,800-block traditional startup,
 unchanged-payload suppression, and full-resolution streams held under their configured rate

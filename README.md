@@ -16,41 +16,11 @@ blurry.
 
 ## How it works
 
-Three panes show the raw feed, a traditional 8×8 DCT codec, and a learned 20×20
-patch autoencoder. Faces are detected and landmarked first, producing one
-importance map that both codecs use to spend bits on brows, eyes, nose and mouth.
-Each codec runs its own 5 Hz packet stream and its own compressed landmark
-stream, so neither gets geometry for free, and both panes are drawn only from
-bytes that were actually serialized.
-
-The **traditional** stream sends the complete scene once at startup, then delta
-packets capped at 1,200 bytes; a block is coded either against what the decoder
-already holds or against a motion-compensated window of the previous decoded
-frame, whichever costs less. The **neural** stream sends four bytes per patch — an
-exact brightness byte plus a three-unit latent — with 1,500-byte delta packets
-and a full keyframe every three seconds.
-
-Both schedule packets the same way: distortion removed per byte, with face
-importance as a bounded multiplier and a deadline that stops any part of the
-picture being starved. That last part matters more than it sounds — ranking by
-importance alone leaves copies of your head behind when you move.
-
-## Current results
-
-| Approach | Complete keyframe | Mean PSNR | 5 Hz two-face reference |
-| -------- | ----------------: | --------: | --------------------: |
-| Traditional DCT | 322.4 kbit startup | 36.84 dB | 54.4 kbit/s after startup |
-| Neural patches | 27.4 kbit | 25.89 dB | 71.1 kbit/s reference |
-
-These are serialized in-memory codec payloads, not network throughput. The
-traditional startup keyframe is a one-time cost and is deliberately not hidden
-inside its steady-state figure. Transport framing, audio, loss recovery and
-neural model updates are excluded.
-
-The online autoencoder is still experimental: encoder and decoder share its
-changing weights inside this process. A remote implementation needs a frozen
-model at both endpoints, or an explicit model-update stream whose bytes are
-included in the rate.
+Three panes show the raw feed and the two independent low-bandwidth
+reconstructions produced from serialized payloads. The full architecture,
+packet scheduling rule, wire formats, measured rates and current limitations
+live in [docs/design.md](docs/design.md); [docs/todo.md](docs/todo.md) tracks
+the known gaps that are not part of the current design.
 
 ## Building
 
@@ -60,7 +30,7 @@ uses the CMake and Ninja that ship with it.
 
 ```powershell
 .\dd.ps1 build            # both configurations
-.\dd.ps1 test             # headless checks, no camera needed
+.\dd.ps1 test --label low-ban  # headless checks, no camera needed
 .\dd.ps1 launch           # build Release, then start the app
 .\dd.ps1 evaluate --yes   # score samples/*.png offline
 ```

@@ -17,6 +17,13 @@ you close it.
 - No Windows AI APIs. The only external work is the face detector's network and weights,
   adapted from libfacedetection; keep its BSD notice intact in `face.cpp`/`face-model.cpp`.
 - Build, launch and test through `dd.ps1` (`build`, `launch`, `test`, `evaluate`, `clean`).
+- The [dd](https://github.com/ZacWalk/dd) build driver is vendored unmodified: `dd.ps1`
+  and `.dd/`, with hashes in [docs/dd-upstream.json](docs/dd-upstream.json). Project
+  settings live in `dd.psd1`, dependency pins in `cmake/dd-dependencies.json`, and
+  `.\dd.ps1 commands --json` lists this repository's project commands. dd's
+  [two modes](https://github.com/ZacWalk/dd/blob/main/docs/mcp.md#two-modes) and
+  [commands](https://github.com/ZacWalk/dd/blob/main/docs/cli.md#commands) are documented
+  upstream.
 - Add a check to `src/selftest.cpp` for anything that can be tested without a camera, and
   run `.\dd.ps1 test --label low-ban` before finishing; it runs `/test` in both
   configurations.
