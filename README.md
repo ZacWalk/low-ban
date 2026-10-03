@@ -61,7 +61,7 @@ uses the CMake and Ninja that ship with it.
 ```powershell
 .\dd.ps1 build            # both configurations
 .\dd.ps1 test             # headless checks, no camera needed
-.\dd.ps1 run              # build, then launch
+.\dd.ps1 launch           # build Release, then start the app
 .\dd.ps1 evaluate --yes   # score samples/*.png offline
 ```
 

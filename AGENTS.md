@@ -16,9 +16,10 @@ you close it.
 - C++17, Win32, Media Foundation. Builds `Debug|x64` and `Release|x64` only.
 - No Windows AI APIs. The only external work is the face detector's network and weights,
   adapted from libfacedetection; keep its BSD notice intact in `face.cpp`/`face-model.cpp`.
-- Build, run and test through `dd.ps1` (`build`, `run`, `test`, `evaluate`, `clean`).
+- Build, launch and test through `dd.ps1` (`build`, `launch`, `test`, `evaluate`, `clean`).
 - Add a check to `src/selftest.cpp` for anything that can be tested without a camera, and
-  run `.\dd.ps1 test` before finishing.
+  run `.\dd.ps1 test --label low-ban` before finishing; it runs `/test` in both
+  configurations.
 - `dd.ps1 evaluate` scores `samples/*.png` offline. Use it when changing either codec, the
   importance map, or anything that moves a rate or distortion number.
 - Quote payload and quality together. A PSNR gain bought with more bytes is not an
