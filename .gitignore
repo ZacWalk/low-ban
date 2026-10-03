@@ -402,3 +402,4 @@ FodyWeavers.xsd
 build/
 exe/
 intermediate/
+/.dd/state/
