@@ -60,4 +60,8 @@ if(BUILD_TESTING)
     target_compile_features(low_ban_tests PRIVATE cxx_std_17)
     add_test(NAME low_ban_unit COMMAND low_ban_tests)
     set_tests_properties(low_ban_unit PROPERTIES TIMEOUT 30 LABELS low-ban)
+
+    add_test(NAME low_ban_selftest COMMAND low-ban /test)
+    set_tests_properties(low_ban_selftest PROPERTIES
+        TIMEOUT 120 LABELS low-ban WORKING_DIRECTORY "$<TARGET_FILE_DIR:low-ban>")
 endif()
