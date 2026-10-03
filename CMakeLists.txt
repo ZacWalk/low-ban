@@ -27,6 +27,7 @@ add_executable(low-ban WIN32
     src/main.cpp
     src/selftest.cpp
     src/res.rc
+    src/app.manifest
 )
 
 target_sources(low-ban PRIVATE
@@ -64,4 +65,8 @@ if(BUILD_TESTING)
     add_test(NAME low_ban_selftest COMMAND low-ban /test)
     set_tests_properties(low_ban_selftest PROPERTIES
         TIMEOUT 120 LABELS low-ban WORKING_DIRECTORY "$<TARGET_FILE_DIR:low-ban>")
+
+    add_test(NAME low_ban_manifest COMMAND "${CMAKE_COMMAND}"
+        "-DEXE=$<TARGET_FILE:low-ban>" -P "${PROJECT_SOURCE_DIR}/tests/manifest.cmake")
+    set_tests_properties(low_ban_manifest PROPERTIES TIMEOUT 30 LABELS low-ban)
 endif()
