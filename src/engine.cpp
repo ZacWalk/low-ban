@@ -108,6 +108,15 @@ std::string engine::status() const
 	return status_text;
 }
 
+void engine::set_status(std::string text)
+{
+	{
+		std::lock_guard<std::mutex> guard(status_mutex);
+		status_text = std::move(text);
+	}
+	generation_.fetch_add(1);
+}
+
 std::shared_ptr<const render_state> engine::latest() const
 {
 	std::lock_guard<std::mutex> guard(output_mutex);
@@ -150,8 +159,9 @@ void engine::capture_loop(const int width, const int height)
 			while (!stop_requested.load())
 			{
 				auto frame = std::make_shared<video_frame>();
-				if (!camera.read(*frame))
+				if (!camera.read(*frame, error))
 				{
+					if (!error.empty()) break;
 					std::this_thread::sleep_for(std::chrono::milliseconds(5));
 					continue;
 				}
@@ -162,10 +172,11 @@ void engine::capture_loop(const int width, const int height)
 				source_frame = std::move(frame);
 			}
 		}
-		else
+
+		if (!error.empty())
 		{
-			std::lock_guard<std::mutex> guard(status_mutex);
-			status_text = "camera unavailable: " + error;
+			source_fps_.store(0.0);
+			set_status("camera unavailable: " + error);
 		}
 	}
 
@@ -179,8 +190,7 @@ void engine::analysis_loop()
 	std::string error;
 	if (!landmarks.load(asset_path(L"shape_predictor_68_face_landmarks.dat"), error))
 	{
-		std::lock_guard<std::mutex> guard(status_mutex);
-		status_text = "landmark model unavailable: " + error;
+		set_status("landmark model unavailable: " + error);
 	}
 
 	frame_rate rate;
@@ -217,23 +227,17 @@ void engine::analysis_loop()
 
 		if (reset_requested.exchange(false))
 		{
+			// Only the learned side restarts. Its decoder holds codes from the old weights, so
+			// the neural wire begins again with a keyframe; the traditional wire has nothing to
+			// relearn, and replaying its one complete startup keyframe would only charge it again.
 			codec.reset();
-			traditional_stream.reset();
-			traditional_landmarks.reset();
-			traditional_rate.reset();
 			neural_stream.reset();
 			neural_landmarks.reset();
 			neural_rate.reset();
-			traditional_reconstruction = {};
 			neural_reconstruction = {};
-			tracked.clear();
-			transmitted_traditional_parts.clear();
 			transmitted_face_parts.clear();
-			last_updated_blocks = 0;
-			last_traditional_was_keyframe = false;
 			last_updated_patches = 0;
 			last_was_keyframe = false;
-			next_traditional_send = std::chrono::steady_clock::time_point::min();
 			next_neural_send = std::chrono::steady_clock::time_point::min();
 			last_neural_keyframe = std::chrono::steady_clock::time_point::min();
 		}

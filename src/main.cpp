@@ -11,6 +11,7 @@
 #include <windows.h>
 #include <objbase.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -27,7 +28,25 @@ namespace
 	constexpr int video_width = 640;
 	constexpr int video_height = 480;
 	constexpr int layout_padding = 12;
+	constexpr int title_height = 48;
+	// The longest caption, a traditional startup keyframe at four-digit kbit/s, has to fit
+	// under its own pane; at 28 pixels it ran into the neural caption.
+	constexpr int label_height = 24;
 	constexpr UINT_PTR refresh_timer = 1;
+
+	// The title sits a third of the way down the space above the panes and the status line
+	// three paddings above the bottom. This much space above the panes keeps the title clear
+	// of them and the status line clear of the captions.
+	constexpr int minimum_pane_y = std::max(title_height * 3 / 2, layout_padding * 4 + label_height);
+
+	// The panes are fixed-size bitmaps, so a smaller window would cut them off and overlap the
+	// title, captions and status line.
+	POINT minimum_window_size(const HWND wnd)
+	{
+		RECT rect = {0, 0, video_width * 3 + layout_padding * 4, video_height + minimum_pane_y * 2};
+		AdjustWindowRectExForDpi(&rect, WS_OVERLAPPEDWINDOW, TRUE, 0, GetDpiForWindow(wnd));
+		return {rect.right - rect.left, rect.bottom - rect.top};
+	}
 
 	HINSTANCE instance = nullptr;
 	engine pipeline;
@@ -123,12 +142,12 @@ namespace
 
 	void on_paint(const HDC hdc, const RECT& bounds)
 	{
-		static const HFONT title_font = CreateFontW(48, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-		                                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-		                                            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-		static const HFONT label_font = CreateFontW(28, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-		                                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-		                                            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+		static const HFONT title_font = CreateFontW(title_height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+		                                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		                                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+		static const HFONT label_font = CreateFontW(label_height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+		                                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		                                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
 		const int panes_width = video_width * 3 + layout_padding * 2;
 		const int left_x = (bounds.right - panes_width) / 2;
@@ -269,6 +288,13 @@ namespace
 		case WM_ERASEBKGND:
 			return 1;
 
+		case WM_GETMINMAXINFO:
+			{
+				auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
+				limits->ptMinTrackSize = minimum_window_size(wnd);
+			}
+			break;
+
 		case WM_PAINT:
 			{
 				PAINTSTRUCT ps;
@@ -314,14 +340,27 @@ namespace
 		return 0;
 	}
 
+	// A pipe or file on stdout means the caller is capturing the text - CTest, `dd evaluate`,
+	// `| Out-String` - so it has to stay there rather than be sent to a console it cannot read.
+	bool stdout_is_redirected()
+	{
+		const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+		if (out == nullptr || out == INVALID_HANDLE_VALUE) return false;
+		const DWORD type = GetFileType(out);
+		return type == FILE_TYPE_PIPE || type == FILE_TYPE_DISK;
+	}
+
 	int run_console_mode(const bool evaluate)
 	{
-		if (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole())
+		if (!stdout_is_redirected() && (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole()))
 		{
 			FILE* stream = nullptr;
 			freopen_s(&stream, "CONOUT$", "w", stdout);
 			freopen_s(&stream, "CONOUT$", "w", stderr);
 		}
+
+		// Unbuffered, so a run that dies part-way still leaves every check it reached in the log.
+		setvbuf(stdout, nullptr, _IONBF, 0);
 
 		return evaluate ? run_sample_evaluation() : run_self_test();
 	}

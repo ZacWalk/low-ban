@@ -34,8 +34,10 @@ public:
 	bool is_open() const;
 
 	// Blocks until the next frame is available. Returns false on a dropped or malformed
-	// sample; the caller should simply try again.
-	bool read(video_frame& frame);
+	// sample; the caller should simply try again. When the camera has stopped for good -
+	// taken by another application, unplugged - it also sets `error` to say why, and every
+	// later read would fail the same way.
+	bool read(video_frame& frame, std::string& error);
 
 private:
 	struct impl;

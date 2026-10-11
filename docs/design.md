@@ -46,7 +46,7 @@ camera or a window.
 | -------- | -------------- |
 | capture  | Blocks on `IMFSourceReader::ReadSample`, decodes YUY2 into planes, publishes the frame. |
 | analysis | Detects faces, runs landmarks, produces both low bandwidth panes, publishes a `render_state`. |
-| UI       | On a timer, repaints if the generation counter moved. Blits three bitmaps and some text. |
+| UI       | On a timer, repaints if the generation counter moved: a new frame or a new status. Blits three bitmaps and some text. |
 
 Handover is by `std::shared_ptr` to an immutable value, swapped under a short mutex. A
 consumer either sees the previous frame in full or the next frame in full, never a mixture,
@@ -68,6 +68,13 @@ normalised to top-down during the split, so nothing downstream has to think abou
 The negotiated subtype is checked after `SetCurrentMediaType`, and opening fails with the
 actual FOURCC if the camera substituted something else. Everything downstream unpacks YUY2 by
 hand, so a silent substitution would appear as noise rather than as a failure.
+
+A camera that opens and then stops delivering - held by another application, unplugged - fails
+`ReadSample` or flags an error or the end of the stream. The capture thread then stops and
+reports why on the window's status line, as it does when no camera opens at all, instead of
+retrying a reader that is finished. Setting a status moves the generation counter as a frame
+does: with no frames arriving, nothing else would make the window repaint, and the status
+would stay off screen.
 
 ## Comparison
 
@@ -262,6 +269,9 @@ The autoencoder lives entirely on the analysis thread, so it needs no locking: t
 thread that trains it is the one that runs it.
 
 The View menu can reset the autoencoder weights, which makes convergence easy to demonstrate.
+Only the learned side restarts: the neural wire begins again with a keyframe, because its
+decoder holds codes made by the old weights, while the traditional wire carries on and is not
+charged its startup keyframe a second time.
 It also separates *Face landmarking*, which decides whether the landmarker runs at all, from
 *Landmark overlay*, which decides only whether the received geometry is drawn over panels 2
 and 3. Landmarking is primarily a bit-allocation and training signal, not a picture element,
@@ -412,6 +422,9 @@ traditional and neural keyframe reconstruction, bounded sparse deltas,
 latent/transform/landmark corruption handling, complete 4,800-block traditional startup,
 unchanged-payload suppression, and full-resolution streams held under their configured rate
 references.
+
+`/test` and `/evaluate` write to standard output when it is redirected, so CTest's log and the
+`evaluate` result carry their text; run from a console, they attach to it instead.
 
 Three checks are worth calling out, because they catch the failures that are otherwise silent:
 

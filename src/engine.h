@@ -72,6 +72,9 @@ public:
 	void reset_training();
 
 	std::shared_ptr<const render_state> latest() const;
+	// Changes whenever there is something new to paint: a published frame or a new status.
+	// The window repaints on a change, so a status reported while no frames arrive - the
+	// camera unavailable - still reaches the screen.
 	uint64_t generation() const { return generation_.load(); }
 
 	double source_fps() const { return source_fps_.load(); }
@@ -82,6 +85,7 @@ public:
 private:
 	void capture_loop(int width, int height);
 	void analysis_loop();
+	void set_status(std::string text);
 
 	std::atomic<bool> show_faces_{true};
 	std::atomic<bool> show_landmarks_{true};

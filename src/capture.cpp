@@ -1,5 +1,6 @@
 #include "capture.h"
 
+#include <cstdio>
 #include <memory>
 
 #include <windows.h>
@@ -57,6 +58,22 @@ namespace
 			if (c < 32 || c > 126) c = '?';
 		}
 		return fourcc;
+	}
+
+	std::string describe_read_failure(const HRESULT hr)
+	{
+		char code[16] = {};
+		snprintf(code, sizeof(code), " (0x%08lX)", static_cast<unsigned long>(hr));
+		switch (hr)
+		{
+		case MF_E_HW_MFT_FAILED_START_STREAMING:
+		case MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED:
+			return std::string("the camera is in use by another application") + code;
+		case MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED:
+			return std::string("the camera was disconnected") + code;
+		default:
+			return std::string("the camera stopped delivering frames") + code;
+		}
 	}
 
 	ComPtr<IMFMediaSource> activate_first_camera()
@@ -179,7 +196,7 @@ void webcam::close()
 	state = nullptr;
 }
 
-bool webcam::read(video_frame& frame)
+bool webcam::read(video_frame& frame, std::string& error)
 {
 	if (!is_open()) return false;
 
@@ -188,9 +205,25 @@ bool webcam::read(video_frame& frame)
 	LONGLONG timestamp = 0;
 	ComPtr<IMFSample> sample;
 
-	if (FAILED(state->reader->ReadSample(first_video_stream, 0, &stream_index, &flags,
-	                                     &timestamp, &sample)))
+	// A failed read, an error flag or the end of the stream all mean the reader is finished;
+	// retrying would only spin on the same failure with nothing on screen to say why.
+	const HRESULT hr = state->reader->ReadSample(first_video_stream, 0, &stream_index, &flags,
+	                                             &timestamp, &sample);
+	if (FAILED(hr))
+	{
+		error = describe_read_failure(hr);
 		return false;
+	}
+	if (flags & MF_SOURCE_READERF_ERROR)
+	{
+		error = "the camera reported a stream error";
+		return false;
+	}
+	if (flags & MF_SOURCE_READERF_ENDOFSTREAM)
+	{
+		error = "the camera stream ended";
+		return false;
+	}
 
 	if (flags & (MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED | MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED))
 	{
