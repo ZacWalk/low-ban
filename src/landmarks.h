@@ -63,16 +63,56 @@ struct landmark_packet
 	bool keyframe = false;
 };
 
-// Serializes landmark geometry independently of image pixels. Keyframes store quantized
-// absolute coordinates; delta frames pack the common -7..7 coordinate changes into nibbles.
+// Serializes landmark geometry independently of image pixels, on a two pixel grid. Keyframes
+// store absolute coordinates. Delta packets describe each face as one rigid shift plus small
+// per-point residuals, listing only the points whose residual is not zero when that is
+// shorter, so a still or rigidly moving face costs a few bytes rather than one per point.
 class temporal_landmark_stream
 {
 public:
 	void reset();
-	landmark_packet encode(const std::vector<std::vector<point_i>>& faces, bool force_keyframe);
-	bool decode(const landmark_packet& packet, std::vector<std::vector<point_i>>& faces);
+	landmark_packet encode(const face_geometry& faces, bool force_keyframe);
+	bool decode(const landmark_packet& packet, face_geometry& faces);
+
+	// What the decoder holds once every packet from `encode` has arrived, in the same
+	// coordinates `decode` returns. The encoder side of anything that predicts from the
+	// geometry has to use this, not the landmarks it was given.
+	face_geometry transmitted() const;
 
 private:
-	std::vector<std::vector<point_i>> encoder_points;
-	std::vector<std::vector<point_i>> decoder_points;
+	face_geometry encoder_points;
+	face_geometry decoder_points;
 };
+
+// Suppresses landmark jitter before transmission: the "one euro" filter of Casiez, Roussel and
+// Vogel (2012), whose cut-off rises with speed. A still face otherwise flickers by a grid step
+// every frame, which costs geometry bytes and makes the receiver's warped face shimmer, while
+// a fast cut-off during real motion keeps lips and brows from lagging.
+class landmark_filter
+{
+public:
+	void reset();
+	face_geometry apply(const face_geometry& faces, double seconds);
+
+private:
+	struct axis
+	{
+		double value = 0.0;
+		double speed = 0.0;
+	};
+
+	std::vector<std::vector<axis>> state; // per face, x and y of every point
+	double previous_seconds = 0.0;
+};
+
+// Normalised mean error: the average distance between corresponding points, as a fraction of
+// the reference's outer eye corner distance. Computed on landmarks found in a received picture
+// against those found in the source, it measures whether expression survived the wire.
+struct landmark_error
+{
+	double overall = 0.0;
+	double mouth = 0.0; // the 20 lip points alone, where speech and expression move most
+};
+
+bool compare_landmarks(const std::vector<point_i>& reference, const std::vector<point_i>& measured,
+	landmark_error& error);

@@ -25,7 +25,7 @@
     )
     commands = @{
         evaluate = @{
-            description = 'Score the PNG samples in samples/ through the codec offline. No camera needed.'
+            description = 'Score samples/*.png against H.264 at equal bytes and replay samples/*.mp4 clips. No camera needed.'
             script = 'cmake/project-command.ps1'
             effects = 'read'
             'supports-dry-run' = $true

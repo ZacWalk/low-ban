@@ -4,12 +4,10 @@
 #include <cmath>
 #include <limits>
 
+#include "warp.h"
+
 namespace
 {
-	// A normalised step, not a raw gradient scale: every weight moves by about this much per
-	// update regardless of layer, so it is far smaller than a plain SGD rate would be.
-	constexpr float learning_rate = 0.002f;
-
 	double psnr_from_rmse(const double rmse)
 	{
 		return rmse == 0.0 ? std::numeric_limits<double>::infinity() : 20.0 * std::log10(255.0 / rmse);
@@ -232,6 +230,40 @@ namespace
 		level = zigzag_decode(encoded_level);
 		return level != 0;
 	}
+
+	// Moves the face the decoder holds onto newer geometry. Every block the warp changes is
+	// re-predicted from the warped picture at the quantiser it already holds; every other block
+	// keeps its coefficients exactly. Both ends call this with identical arguments, so it costs
+	// nothing on the wire. Returns the blocks it changed.
+	std::vector<int> warp_held_blocks(const transform_codec& codec, const image_u8& reference,
+		const std::vector<uint8_t>& quantizers, const face_geometry& from, const face_geometry& to,
+		std::vector<int16_t>& coefficients)
+	{
+		std::vector<int> changed;
+		image_u8 warped;
+		if (!warp_faces(reference, from, to, warped)) return changed;
+
+		constexpr int size = transform_codec::block_size;
+		const int cols = (reference.width() + size - 1) / size;
+		const int block_count = static_cast<int>(quantizers.size());
+		int16_t predicted[transform_codec::block_coefficients];
+		for (int block = 0; block < block_count; ++block)
+		{
+			const int block_x = block % cols * size;
+			const int block_y = block / cols * size;
+			bool differs = false;
+			for (int y = block_y; !differs && y < std::min(block_y + size, reference.height()); ++y)
+				for (int x = block_x; !differs && x < std::min(block_x + size, reference.width()); ++x)
+					differs = warped(x, y) != reference(x, y);
+			if (!differs || quantizers[block] == 0) continue;
+
+			codec.predict_block(warped, block_x, block_y, 0, 0, quantizers[block], predicted);
+			std::copy(predicted, predicted + transform_codec::block_coefficients,
+				coefficients.begin() + static_cast<ptrdiff_t>(block) * transform_codec::block_coefficients);
+			changed.push_back(block);
+		}
+		return changed;
+	}
 }
 
 reconstruction_quality measure_quality(const image_u8& source, const image_u8& reconstructed,
@@ -400,13 +432,17 @@ void temporal_transform_stream::reset()
 	encoder_age.clear();
 	encoder_reference = {};
 	decoder_reference = {};
+	encoder_geometry.clear();
+	decoder_geometry.clear();
+	encoder_animating = false;
+	decoder_animating = false;
 	frame_width = 0;
 	frame_height = 0;
 }
 
 transform_packet temporal_transform_stream::encode(const transform_codec& codec, const image_u8& source,
 	                                                const image_u8* importance, bool force_keyframe,
-	                                                const size_t max_packet_bytes)
+	                                                const size_t max_packet_bytes, const face_geometry& geometry)
 {
 	transform_packet packet;
 	std::vector<int16_t> current_coefficients;
@@ -421,6 +457,57 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 
 	const bool can_predict = !force_keyframe && encoder_reference.width() == source.width()
 		&& encoder_reference.height() == source.height() && !encoder_reference.empty();
+
+	// What the decoder will hold for every block before this packet's records are applied.
+	// Nothing below touches the encoder's own state until the packet is known to be sent: a
+	// packet with no records is never sent, so its warp must not be committed either.
+	std::vector<int16_t> held = force_keyframe
+		? std::vector<int16_t>(current_coefficients.size(), 0) : encoder_coefficients;
+	std::vector<uint8_t> held_quantizers = force_keyframe
+		? std::vector<uint8_t>(current_quantizers.size(), 0) : encoder_quantizers;
+
+	// Squared pixel error left in a block if the decoder keeps `levels` for it. The DCT here
+	// is orthonormal, so this sum of squared dequantised coefficient errors is exactly the
+	// squared pixel error the decoder would be showing.
+	const auto held_distortion = [&](const std::vector<int16_t>& levels, const int block)
+	{
+		const size_t base = static_cast<size_t>(block) * transform_codec::block_coefficients;
+		double distortion = 0.0;
+		for (int coefficient = 0; coefficient < transform_codec::block_coefficients; ++coefficient)
+		{
+			const double error = (current_coefficients[base + coefficient] * static_cast<double>(current_quantizers[block])
+				- levels[base + coefficient] * static_cast<double>(held_quantizers[block]))
+				* frequency_scale(coefficient % transform_codec::block_size, coefficient / transform_codec::block_size);
+			distortion += error * error;
+		}
+		return distortion;
+	};
+
+	// The landmark warp is free on the wire but not always right: a hand over the face or a
+	// lost track moves the mesh without moving the face. It is committed only when it brings
+	// the blocks it touches closer to the source than leaving them alone would; otherwise it
+	// is refused, which also stops the receiver animating onto geometry this picture defies.
+	bool warp = false;
+	bool refuse = false;
+	if (can_predict)
+	{
+		std::vector<int16_t> warped = held;
+		const std::vector<int> moved = warp_held_blocks(codec, encoder_reference, held_quantizers,
+			encoder_geometry, geometry, warped);
+		double still_error = 0.0;
+		double warped_error = 0.0;
+		for (const int block : moved)
+		{
+			still_error += held_distortion(held, block);
+			warped_error += held_distortion(warped, block);
+		}
+		if (!moved.empty() && warped_error < still_error)
+		{
+			held = std::move(warped);
+			warp = true;
+		}
+		else refuse = !moved.empty();
+	}
 
 	// Cost of one residual token, near enough for a decision that only has to be about right.
 	const auto token_bytes = [](const int delta)
@@ -498,27 +585,15 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 	for (int block = 0; block < block_count; ++block)
 	{
 		const size_t base = static_cast<size_t>(block) * transform_codec::block_coefficients;
-		const int sent_quantizer = force_keyframe ? 0 : encoder_quantizers[block];
+		const int sent_quantizer = held_quantizers[block];
 		const int block_x = block % cols * transform_codec::block_size;
 		const int block_y = block / cols * transform_codec::block_size;
 
 		bool identical = current_quantizers[block] == sent_quantizer;
-		double distortion = 0.0;
-		for (int coefficient = 0; coefficient < transform_codec::block_coefficients; ++coefficient)
-		{
-			const int now = current_coefficients[base + coefficient];
-			const int sent = force_keyframe ? 0 : encoder_coefficients[base + coefficient];
-
-			// The DCT here is orthonormal, so this sum of squared dequantised coefficient
-			// errors is exactly the squared pixel error the decoder is currently showing.
-			const double error = (now * static_cast<double>(current_quantizers[block])
-				- sent * static_cast<double>(sent_quantizer))
-				* frequency_scale(coefficient % transform_codec::block_size,
-					coefficient / transform_codec::block_size);
-			distortion += error * error;
-			if (now != sent) identical = false;
-		}
+		for (int coefficient = 0; identical && coefficient < transform_codec::block_coefficients; ++coefficient)
+			identical = current_coefficients[base + coefficient] == held[base + coefficient];
 		if (identical) continue;
+		const double distortion = held_distortion(held, block);
 
 		// Squared pixel error the codec is willing to accept to save one byte. Tied to the
 		// block's own quantiser, so a coarsely coded background is allowed to be sloppier
@@ -534,7 +609,7 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		}
 		else
 		{
-			coded = code_against(block, encoder_coefficients.data() + base, send_quantizer, {0, 0}, false, lambda);
+			coded = code_against(block, held.data() + base, send_quantizer, {0, 0}, false, lambda);
 			if (can_predict)
 			{
 				const point_i motion = search_motion(source, encoder_reference, block_x, block_y, seed_vector);
@@ -605,12 +680,8 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		return a->index < b->index;
 	});
 
-	append_packet_header(packet.bytes, 'T', 2, force_keyframe, source.width(), source.height(), 0);
-	if (force_keyframe)
-	{
-		encoder_coefficients.assign(current_coefficients.size(), 0);
-		encoder_quantizers.assign(current_quantizers.size(), 0);
-	}
+	append_packet_header(packet.bytes, 'T', 3, force_keyframe, source.width(), source.height(), 0);
+	packet.bytes[3] = static_cast<uint8_t>(packet.bytes[3] | (warp ? 2 : 0) | (refuse ? 4 : 0));
 
 	// A gap never needs more bytes than the absolute index it replaces, and an inherited
 	// vector never more than a spelled out one, so the budget reserved above always holds.
@@ -642,12 +713,14 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		// coefficient has been judged not worth its byte.
 		const size_t base = static_cast<size_t>(entry->index) * transform_codec::block_coefficients;
 		for (int coefficient = 0; coefficient < transform_codec::block_coefficients; ++coefficient)
-			encoder_coefficients[base + coefficient] = coded.coefficients[coefficient];
-		encoder_quantizers[entry->index] = current_quantizers[entry->index];
+			held[base + coefficient] = coded.coefficients[coefficient];
+		held_quantizers[entry->index] = current_quantizers[entry->index];
 		encoder_age[entry->index] = 0;
 		++packet.updated_blocks;
 	}
-	if (packet.updated_blocks == 0)
+	// A refused warp is announced even with nothing else to say, but only to a receiver that is
+	// animating: one that already shows the plain picture needs no ten-byte reminder.
+	if (packet.updated_blocks == 0 && !(refuse && encoder_animating))
 	{
 		packet.bytes.clear();
 		return packet;
@@ -655,21 +728,27 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 	packet.bytes[8] = static_cast<uint8_t>(packet.updated_blocks & 0xff);
 	packet.bytes[9] = static_cast<uint8_t>((packet.updated_blocks >> 8) & 0xff);
 	packet.keyframe = force_keyframe;
+	packet.warped = warp;
+	encoder_coefficients = std::move(held);
+	encoder_quantizers = std::move(held_quantizers);
+	encoder_geometry = geometry;
+	encoder_animating = force_keyframe || warp || (encoder_animating && !refuse);
 	frame_width = source.width();
 	frame_height = source.height();
 
 	// What the decoder will be holding once this packet lands, and therefore what the next
-	// packet's motion vectors are allowed to point into.
+	// packet's motion vectors are allowed to point into and its warp starts from.
 	codec.reconstruct_coefficients(encoder_coefficients, encoder_quantizers, frame_width, frame_height,
 		encoder_reference);
 	return packet;
 }
 
 bool temporal_transform_stream::decode(const transform_codec& codec, const transform_packet& packet,
-	                                   const int width, const int height, image_u8& reconstructed)
+	                                   const int width, const int height, image_u8& reconstructed,
+	                                   const face_geometry& geometry)
 {
 	if (packet.bytes.size() < 10 || packet.bytes[0] != 'L' || packet.bytes[1] != 'T'
-		|| packet.bytes[2] != 2) return false;
+		|| packet.bytes[2] != 3 || (packet.bytes[3] & ~7u) != 0) return false;
 	size_t offset = 4;
 	int encoded_width = 0, encoded_height = 0, count = 0;
 	if (!read_u16(packet.bytes, offset, encoded_width) || !read_u16(packet.bytes, offset, encoded_height)
@@ -679,6 +758,9 @@ bool temporal_transform_stream::decode(const transform_codec& codec, const trans
 	const int rows = (height + transform_codec::block_size - 1) / transform_codec::block_size;
 	const int block_count = cols * rows;
 	const bool keyframe = (packet.bytes[3] & 1) != 0;
+	const bool warp = (packet.bytes[3] & 2) != 0;
+	const bool refuse = (packet.bytes[3] & 4) != 0;
+	if ((keyframe && (warp || refuse)) || (warp && refuse)) return false;
 	auto next_coefficients = keyframe ? std::vector<int16_t>(static_cast<size_t>(block_count)
 		* transform_codec::block_coefficients, 0) : decoder_coefficients;
 	auto next_quantizers = keyframe ? std::vector<uint8_t>(block_count, 0) : decoder_quantizers;
@@ -686,6 +768,11 @@ bool temporal_transform_stream::decode(const transform_codec& codec, const trans
 		|| next_quantizers.size() != static_cast<size_t>(block_count)) return false;
 	const bool can_predict = !keyframe && decoder_reference.width() == width
 		&& decoder_reference.height() == height && !decoder_reference.empty();
+	if (warp)
+	{
+		if (!can_predict) return false;
+		warp_held_blocks(codec, decoder_reference, next_quantizers, decoder_geometry, geometry, next_coefficients);
+	}
 
 	int16_t predicted[transform_codec::block_coefficients];
 	int64_t block = -1;
@@ -750,6 +837,16 @@ bool temporal_transform_stream::decode(const transform_codec& codec, const trans
 	decoder_coefficients = std::move(next_coefficients);
 	decoder_quantizers = std::move(next_quantizers);
 	decoder_reference = reconstructed;
+	decoder_geometry = geometry;
+	decoder_animating = keyframe || warp || (decoder_animating && !refuse);
+	return true;
+}
+
+bool temporal_transform_stream::animate(const face_geometry& geometry, image_u8& shown) const
+{
+	if (decoder_reference.empty()) return false;
+	if (decoder_animating) warp_faces(decoder_reference, decoder_geometry, geometry, shown);
+	else shown = decoder_reference;
 	return true;
 }
 
@@ -782,398 +879,4 @@ void transform_codec::predict_block(const image_u8& reference, const int block_x
 				transformed[v][u] / (quantizer * frequency_scale(u, v))));
 			coefficients[v * block_size + u] = static_cast<int16_t>(std::clamp(value, -32767, 32767));
 		}
-}
-
-void patch_autoencoder::dense::reset(const int layer_inputs, const int layer_outputs, std::mt19937& rng)
-{
-	inputs = layer_inputs;
-	outputs = layer_outputs;
-	weights.assign(static_cast<size_t>(inputs) * outputs, 0.0f);
-	bias.assign(outputs, 0.0f);
-	weight_rate.assign(weights.size(), 0.0f);
-	bias_rate.assign(outputs, 0.0f);
-
-	// Symmetry breaking, scaled by fan-in so the initial activations stay in range.
-	const float limit = 1.0f / std::sqrt(static_cast<float>(inputs));
-	std::uniform_real_distribution<float> distribution(-limit, limit);
-	for (float& weight : weights) weight = distribution(rng);
-}
-
-void patch_autoencoder::dense::forward(const float* input, float* output, const bool activate) const
-{
-	for (int o = 0; o < outputs; ++o)
-	{
-		const float* w = weights.data() + static_cast<size_t>(o) * inputs;
-		float sum = bias[o];
-		for (int i = 0; i < inputs; ++i) sum += w[i] * input[i];
-		output[o] = activate ? std::tanh(sum) : sum;
-	}
-}
-
-// Per-weight step normalised by a running mean square gradient. Plain SGD needs a learning
-// rate that suits the worst-scaled layer; this lets every layer move at its own pace, which
-// is what makes the reset-and-watch-it-converge demo work in seconds rather than minutes.
-void patch_autoencoder::dense::backward(const float* input, const float* gradient, float* input_gradient)
-{
-	if (input_gradient != nullptr)
-		for (int i = 0; i < inputs; ++i) input_gradient[i] = 0.0f;
-
-	for (int o = 0; o < outputs; ++o)
-	{
-		float* w = weights.data() + static_cast<size_t>(o) * inputs;
-		float* rate = weight_rate.data() + static_cast<size_t>(o) * inputs;
-		const float g = gradient[o];
-		for (int i = 0; i < inputs; ++i)
-		{
-			if (input_gradient != nullptr) input_gradient[i] += w[i] * g;
-			const float step = g * input[i];
-			rate[i] = 0.9f * rate[i] + 0.1f * step * step;
-			w[i] -= learning_rate * step / (std::sqrt(rate[i]) + 1e-8f);
-		}
-		bias_rate[o] = 0.9f * bias_rate[o] + 0.1f * g * g;
-		bias[o] -= learning_rate * g / (std::sqrt(bias_rate[o]) + 1e-8f);
-	}
-}
-
-patch_autoencoder::patch_autoencoder() : rng(12345)
-{
-	reset();
-}
-
-void patch_autoencoder::reset()
-{
-	training_steps = 0;
-	recent_loss = 0.0f;
-	rng.seed(12345);
-	analysis.reset(patch_pixels, code_size, rng);
-	synthesis_hidden.reset(code_size, hidden_size, rng);
-	synthesis_pixels.reset(hidden_size, patch_pixels, rng);
-}
-
-int patch_autoencoder::normalise(const image_u8& src, const int px, const int py, float* input) const
-{
-	int total = 0;
-	for (int y = 0; y < patch_size; ++y)
-	{
-		const uint8_t* row = src.row(py + y) + px;
-		for (int x = 0; x < patch_size; ++x) total += row[x];
-	}
-
-	const int mean = (total + patch_pixels / 2) / patch_pixels;
-	for (int y = 0; y < patch_size; ++y)
-	{
-		const uint8_t* row = src.row(py + y) + px;
-		for (int x = 0; x < patch_size; ++x)
-			input[y * patch_size + x] = (static_cast<int>(row[x]) - mean) / 128.0f;
-	}
-	return mean;
-}
-
-void patch_autoencoder::encode(const float* input, float* code) const
-{
-	analysis.forward(input, code, true);
-}
-
-void patch_autoencoder::decode(const float* code, float* hidden, float* output) const
-{
-	synthesis_hidden.forward(code, hidden, true);
-	synthesis_pixels.forward(hidden, output, false);
-}
-
-float patch_autoencoder::train(const image_u8& luma, const int batch, const image_u8* importance)
-{
-	const int cols = luma.width() / patch_size;
-	const int rows = luma.height() / patch_size;
-	if (cols <= 0 || rows <= 0 || batch <= 0) return recent_loss;
-
-	std::uniform_int_distribution<int> pick_col(0, cols - 1);
-	std::uniform_int_distribution<int> pick_row(0, rows - 1);
-
-	float input[patch_pixels];
-	float code[code_size];
-	float hidden[hidden_size];
-	float output[patch_pixels];
-	float output_grad[patch_pixels];
-	float hidden_grad[hidden_size];
-	float code_grad[code_size];
-
-	double total_error = 0.0;
-	double total_weight = 0.0;
-
-	for (int n = 0; n < batch; ++n)
-	{
-		const int px = pick_col(rng) * patch_size;
-		const int py = pick_row(rng) * patch_size;
-
-		normalise(luma, px, py, input);
-		encode(input, code);
-		decode(code, hidden, output);
-
-		// The output layer is linear, so this is already dL/dz for it.
-		for (int i = 0; i < patch_pixels; ++i)
-		{
-			const float error = output[i] - input[i];
-			const int x = px + i % patch_size;
-			const int y = py + i / patch_size;
-			const float weight = importance != nullptr && importance->contains(x, y)
-				? std::max(1.0f, (*importance)(x, y) / 32.0f) : 1.0f;
-			total_error += weight * static_cast<double>(error) * error;
-			total_weight += weight;
-			output_grad[i] = weight * error / patch_pixels;
-		}
-
-		synthesis_pixels.backward(hidden, output_grad, hidden_grad);
-		for (int i = 0; i < hidden_size; ++i) hidden_grad[i] *= 1.0f - hidden[i] * hidden[i];
-		synthesis_hidden.backward(code, hidden_grad, code_grad);
-		for (int j = 0; j < code_size; ++j) code_grad[j] *= 1.0f - code[j] * code[j];
-		analysis.backward(input, code_grad, nullptr);
-	}
-
-	++training_steps;
-	recent_loss = static_cast<float>(total_error / total_weight);
-	return recent_loss;
-}
-
-void patch_autoencoder::reconstruct(const image_u8& src, image_u8& dst) const
-{
-	std::vector<int8_t> codes;
-	encode_codes(src, codes);
-	reconstruct_codes(codes, src.width(), src.height(), dst);
-}
-
-void patch_autoencoder::encode_codes(const image_u8& src, std::vector<int8_t>& codes) const
-{
-	const int cols = src.width() / patch_size;
-	const int rows = src.height() / patch_size;
-	codes.resize(static_cast<size_t>(cols) * rows * bytes_per_patch);
-	float input[patch_pixels];
-	float code[code_size];
-
-	for (int row = 0; row < rows; ++row)
-	{
-		for (int col = 0; col < cols; ++col)
-		{
-			const int mean = normalise(src, col * patch_size, row * patch_size, input);
-			encode(input, code);
-			const size_t offset = (static_cast<size_t>(row) * cols + col) * bytes_per_patch;
-			codes[offset] = static_cast<int8_t>(mean - 128);
-			for (int i = 0; i < code_size; ++i)
-				codes[offset + 1 + i] = static_cast<int8_t>(
-					std::round(std::clamp(code[i], -1.0f, 1.0f) * 127.0f));
-		}
-	}
-}
-
-bool patch_autoencoder::reconstruct_codes(const std::vector<int8_t>& codes, const int width,
-	                                      const int height, image_u8& dst) const
-{
-	const int cols = width / patch_size;
-	const int rows = height / patch_size;
-	if (width <= 0 || height <= 0 || codes.size() != static_cast<size_t>(cols) * rows * bytes_per_patch)
-		return false;
-
-	dst.resize(width, height);
-	dst.fill(0);
-	float code[code_size];
-	float hidden[hidden_size];
-	float output[patch_pixels];
-	for (int row = 0; row < rows; ++row)
-	{
-		for (int col = 0; col < cols; ++col)
-		{
-			const size_t offset = (static_cast<size_t>(row) * cols + col) * bytes_per_patch;
-			const int mean = codes[offset] + 128;
-			for (int i = 0; i < code_size; ++i) code[i] = codes[offset + 1 + i] / 127.0f;
-			decode(code, hidden, output);
-
-			for (int y = 0; y < patch_size; ++y)
-			{
-				uint8_t* out = dst.row(row * patch_size + y) + col * patch_size;
-				for (int x = 0; x < patch_size; ++x)
-					out[x] = static_cast<uint8_t>(std::clamp(
-						static_cast<int>(std::lround(mean + output[y * patch_size + x] * 128.0f)), 0, 255));
-			}
-		}
-	}
-	return true;
-}
-
-void temporal_patch_stream::reset()
-{
-	encoder_codes.clear();
-	decoder_codes.clear();
-	encoder_age.clear();
-	frame_width = 0;
-	frame_height = 0;
-}
-
-latent_packet temporal_patch_stream::encode(const patch_autoencoder& model, const image_u8& source,
-	                                        const image_u8* importance, bool force_keyframe,
-	                                        const size_t max_packet_bytes)
-{
-	latent_packet packet;
-	std::vector<int8_t> current;
-	model.encode_codes(source, current);
-	const int cols = source.width() / patch_autoencoder::patch_size;
-	const int rows = source.height() / patch_autoencoder::patch_size;
-	const int patch_count = cols * rows;
-	force_keyframe = force_keyframe || source.width() != frame_width || source.height() != frame_height
-		|| encoder_codes.size() != current.size();
-
-	if (force_keyframe)
-	{
-		append_packet_header(packet.bytes, 'B', 2, true, source.width(), source.height(), patch_count);
-		for (const int8_t code : current) packet.bytes.push_back(static_cast<uint8_t>(static_cast<int>(code) + 128));
-		packet.keyframe = true;
-		packet.updated_patches = patch_count;
-		encoder_codes = std::move(current);
-		encoder_age.assign(patch_count, 0);
-		frame_width = source.width();
-		frame_height = source.height();
-		return packet;
-	}
-	if (encoder_age.size() != static_cast<size_t>(patch_count)) encoder_age.assign(patch_count, 0);
-	if (max_packet_bytes < 10) return packet;
-
-	struct candidate
-	{
-		int index = 0;
-		bool urgent = false;
-		double priority = 0.0;
-		size_t cost = 0;
-		std::vector<uint8_t> body;
-	};
-	std::vector<candidate> candidates;
-	for (int index = 0; index < patch_count; ++index)
-	{
-		candidate entry;
-		double distortion = 0.0;
-		for (int code = 0; code < patch_autoencoder::bytes_per_patch; ++code)
-		{
-			const size_t offset = static_cast<size_t>(index) * patch_autoencoder::bytes_per_patch + code;
-			const int delta = static_cast<int>(current[offset]) - encoder_codes[offset];
-
-			// A mean step and a code step are both worth roughly one grey level at the
-			// output, so they can be summed without weighting.
-			distortion += static_cast<double>(delta) * delta;
-			append_varuint(entry.body, zigzag_encode(delta));
-		}
-		if (distortion == 0.0) continue;
-
-		int importance_sum = 0;
-		const int patch_x = index % cols * patch_autoencoder::patch_size;
-		const int patch_y = index / cols * patch_autoencoder::patch_size;
-		for (int y = 0; y < patch_autoencoder::patch_size; ++y)
-			for (int x = 0; x < patch_autoencoder::patch_size; ++x)
-				importance_sum += importance != nullptr && importance->contains(patch_x + x, patch_y + y)
-					? (*importance)(patch_x + x, patch_y + y) : 32;
-
-		// Same rule as the transform stream: latent error removed per byte, with face
-		// importance as a bounded multiplier rather than an overriding one.
-		const double average = importance_sum / static_cast<double>(patch_autoencoder::patch_pixels);
-		entry.index = index;
-		entry.cost = varuint_size(static_cast<uint32_t>(index)) + entry.body.size();
-		entry.urgent = encoder_age[index] >= starvation_deadline;
-		entry.priority = importance_gain(average) * distortion / entry.cost;
-		candidates.push_back(std::move(entry));
-	}
-	std::sort(candidates.begin(), candidates.end(), [](const candidate& a, const candidate& b)
-	{
-		if (a.urgent != b.urgent) return a.urgent;
-		return a.priority != b.priority ? a.priority > b.priority : a.index < b.index;
-	});
-
-	std::vector<const candidate*> selected;
-	size_t used = 10;
-	for (const candidate& entry : candidates)
-	{
-		if (used + entry.cost > max_packet_bytes)
-		{
-			if (encoder_age[entry.index] < 0xffff) ++encoder_age[entry.index];
-			continue;
-		}
-		used += entry.cost;
-		selected.push_back(&entry);
-	}
-	std::sort(selected.begin(), selected.end(), [](const candidate* a, const candidate* b)
-	{
-		return a->index < b->index;
-	});
-
-	append_packet_header(packet.bytes, 'B', 2, false, source.width(), source.height(), 0);
-	int previous_index = -1;
-	for (const candidate* change : selected)
-	{
-		append_varuint(packet.bytes, static_cast<uint32_t>(change->index - previous_index - 1));
-		packet.bytes.insert(packet.bytes.end(), change->body.begin(), change->body.end());
-		previous_index = change->index;
-		for (int code = 0; code < patch_autoencoder::bytes_per_patch; ++code)
-		{
-			const size_t offset = static_cast<size_t>(change->index) * patch_autoencoder::bytes_per_patch + code;
-			encoder_codes[offset] = current[offset];
-		}
-		encoder_age[change->index] = 0;
-		++packet.updated_patches;
-	}
-
-	if (packet.updated_patches == 0)
-	{
-		packet.bytes.clear();
-		return packet;
-	}
-	packet.bytes[8] = static_cast<uint8_t>(packet.updated_patches & 0xff);
-	packet.bytes[9] = static_cast<uint8_t>((packet.updated_patches >> 8) & 0xff);
-	return packet;
-}
-
-bool temporal_patch_stream::decode(const patch_autoencoder& model, const latent_packet& packet,
-	                               const int width, const int height, image_u8& reconstructed)
-{
-	if (packet.bytes.size() < 10 || packet.bytes[0] != 'L' || packet.bytes[1] != 'B'
-		|| packet.bytes[2] != 2) return false;
-	size_t offset = 4;
-	int encoded_width = 0;
-	int encoded_height = 0;
-	int count = 0;
-	if (!read_u16(packet.bytes, offset, encoded_width) || !read_u16(packet.bytes, offset, encoded_height)
-		|| !read_u16(packet.bytes, offset, count) || encoded_width != width || encoded_height != height)
-		return false;
-	const int patch_count = width / patch_autoencoder::patch_size * (height / patch_autoencoder::patch_size);
-	const size_t stride = patch_autoencoder::bytes_per_patch;
-	std::vector<int8_t> next = decoder_codes;
-	const bool keyframe = (packet.bytes[3] & 1) != 0;
-	if (keyframe)
-	{
-		if (count != patch_count || packet.bytes.size() != offset + static_cast<size_t>(count) * stride)
-			return false;
-		next.resize(static_cast<size_t>(count) * stride);
-		for (size_t index = 0; index < static_cast<size_t>(count) * stride; ++index)
-			next[index] = static_cast<int8_t>(static_cast<int>(packet.bytes[offset++]) - 128);
-	}
-	else
-	{
-		if (next.size() != static_cast<size_t>(patch_count) * stride) return false;
-		int64_t index = -1;
-		for (int change = 0; change < count; ++change)
-		{
-			uint32_t gap = 0;
-			if (!read_varuint(packet.bytes, offset, gap)) return false;
-			index += static_cast<int64_t>(gap) + 1;
-			if (index >= patch_count) return false;
-			for (int code = 0; code < patch_autoencoder::bytes_per_patch; ++code)
-			{
-				uint32_t encoded_delta = 0;
-				if (!read_varuint(packet.bytes, offset, encoded_delta)) return false;
-				const size_t code_offset = static_cast<size_t>(index) * stride + code;
-				const int value = static_cast<int>(next[code_offset]) + zigzag_decode(encoded_delta);
-				if (value < -128 || value > 127) return false;
-				next[code_offset] = static_cast<int8_t>(value);
-			}
-		}
-		if (offset != packet.bytes.size()) return false;
-	}
-
-	if (!model.reconstruct_codes(next, width, height, reconstructed)) return false;
-	decoder_codes = std::move(next);
-	return true;
 }

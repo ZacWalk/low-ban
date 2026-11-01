@@ -9,11 +9,11 @@
 #define IDM_ABOUT       200
 #define IDM_EXIT        201
 #define IDM_EDGEDETECT  202
-#define IDM_AUTOENCODER 203
 #define IDM_SCALE       204
 #define IDM_FACEDETECT  205
 #define IDM_FACELANDMARK 206
 #define IDM_LANDMARKOVERLAY 207
+#define IDM_RECORD      208
 
 #ifndef IDC_STATIC
 #define IDC_STATIC      -1

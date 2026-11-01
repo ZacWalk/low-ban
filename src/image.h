@@ -12,6 +12,16 @@ struct point_i
 	int y = 0;
 };
 
+inline bool operator==(const point_i& a, const point_i& b)
+{
+	return a.x == b.x && a.y == b.y;
+}
+
+inline bool operator!=(const point_i& a, const point_i& b)
+{
+	return !(a == b);
+}
+
 struct point_f
 {
 	float x = 0.0f;
@@ -35,6 +45,9 @@ struct rect_i
 		return {x, y, x + w - 1, y + h - 1};
 	}
 };
+
+// Landmark sets, one per face. Faces are paired between frames by index.
+using face_geometry = std::vector<std::vector<point_i>>;
 
 template <typename T>
 class image
@@ -107,6 +120,15 @@ struct video_frame
 // Decodes a packed YUY2 buffer (Y0 Cb Y1 Cr) into planes. A negative stride means the
 // source rows are stored bottom-up, which is normalised away here.
 bool decode_yuy2(video_frame& out, const uint8_t* buffer, size_t buffer_len, int width, int height, int stride);
+
+// Packs planes back into YUY2, the inverse of decode_yuy2. Recorded clips are written in the
+// format the camera delivered.
+void encode_yuy2(const video_frame& frame, std::vector<uint8_t>& buffer);
+
+// Decodes NV12 - a luma plane of `plane_rows` rows, then interleaved Cb Cr at half size in
+// both directions - into the planes decode_yuy2 produces, repeating each chroma row.
+bool decode_nv12(video_frame& out, const uint8_t* buffer, size_t buffer_len, int width, int height, int stride,
+	int plane_rows);
 
 void yuv_to_bgra(const video_frame& frame, std::vector<uint8_t>& bgra);
 

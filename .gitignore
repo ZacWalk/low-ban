@@ -403,3 +403,6 @@ build/
 exe/
 intermediate/
 /.dd/state/
+
+# Clips recorded with File > Record clip show whoever was in front of the camera
+samples/*.mp4

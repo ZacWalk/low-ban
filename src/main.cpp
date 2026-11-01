@@ -1,10 +1,12 @@
 // low-ban : low bandwidth video with face landmarking.
 //
 // The window is deliberately thin: it owns the message loop and the three panes, and does no
-// image processing of its own. Everything else lives in engine/detect/landmarks/codec.
+// image processing of its own. Everything else lives in engine/session and the modules below.
 //
 // Command line:
-//   /test   run the headless self test and exit with a non-zero code on failure
+//   /test         run the headless self test and exit with a non-zero code on failure
+//   /evaluate     score samples/*.png and samples/*.mp4 offline and print CSV
+//   /probe-h264   one H.264 round trip, run as a child to find out whether it crashes
 #include <SDKDDKVer.h>
 
 #define WIN32_LEAN_AND_MEAN
@@ -16,6 +18,7 @@
 #include <memory>
 #include <string>
 
+#include "baseline.h"
 #include "capture.h"
 #include "engine.h"
 #include "res.h"
@@ -29,15 +32,16 @@ namespace
 	constexpr int video_height = 480;
 	constexpr int layout_padding = 12;
 	constexpr int title_height = 48;
-	// The longest caption, a traditional startup keyframe at four-digit kbit/s, has to fit
-	// under its own pane; at 28 pixels it ran into the neural caption.
+	// Each pane has three caption lines - rate, quality, packets - so no figure has to share a
+	// line long enough to run into the next pane's caption.
 	constexpr int label_height = 24;
+	constexpr int caption_lines = 3;
 	constexpr UINT_PTR refresh_timer = 1;
 
 	// The title sits a third of the way down the space above the panes and the status line
 	// three paddings above the bottom. This much space above the panes keeps the title clear
 	// of them and the status line clear of the captions.
-	constexpr int minimum_pane_y = std::max(title_height * 3 / 2, layout_padding * 4 + label_height);
+	constexpr int minimum_pane_y = std::max(title_height * 3 / 2, layout_padding * 4 + label_height * caption_lines);
 
 	// The panes are fixed-size bitmaps, so a smaller window would cut them off and overlap the
 	// title, captions and status line.
@@ -121,6 +125,23 @@ namespace
 		TextOutW(hdc, (bounds.right - extent.cx) / 2, y, text, len);
 	}
 
+	// One caption line under a pane, `line` lines below its bottom edge.
+	void draw_caption(const HDC hdc, const int x, const int pane_y, const int line, const wchar_t* text)
+	{
+		TextOutW(hdc, x, pane_y + video_height + layout_padding + line * label_height, text,
+		         static_cast<int>(wcslen(text)));
+	}
+
+	// Landmark error as a percentage of the eye-corner distance, or a dash before there is a
+	// received picture and a landmarked face to measure.
+	std::wstring expression_text(const receiver_view& view)
+	{
+		if (!view.expression_measured) return L"-";
+		wchar_t text[32];
+		swprintf_s(text, L"%0.1f%%", view.expression.overall * 100.0);
+		return text;
+	}
+
 	INT_PTR CALLBACK about_proc(const HWND dialog, const UINT message, const WPARAM wparam, LPARAM)
 	{
 		switch (message)
@@ -151,8 +172,8 @@ namespace
 
 		const int panes_width = video_width * 3 + layout_padding * 2;
 		const int left_x = (bounds.right - panes_width) / 2;
-		const int traditional_x = left_x + video_width + layout_padding;
-		const int neural_x = traditional_x + video_width + layout_padding;
+		const int lowban_x = left_x + video_width + layout_padding;
+		const int baseline_x = lowban_x + video_width + layout_padding;
 		const int pane_y = (bounds.bottom - video_height) / 2;
 
 		SetTextColor(hdc, RGB(200, 200, 200));
@@ -163,13 +184,12 @@ namespace
 		SelectObject(hdc, label_font);
 
 		const auto state = pipeline.latest();
-		const double source_fps = pipeline.source_fps();
 
 		if (state)
 		{
 			blit_colour(hdc, left_x, pane_y, state->width, state->height, state->source_bgra);
-			blit_grey(hdc, traditional_x, pane_y, state->traditional);
-			blit_grey(hdc, neural_x, pane_y, state->neural);
+			blit_grey(hdc, lowban_x, pane_y, state->lowban.picture);
+			blit_grey(hdc, baseline_x, pane_y, state->baseline.picture);
 
 			// Drawn over the source so detection can be judged separately from landmarking.
 			static const HPEN face_pen = CreatePen(PS_SOLID, 2, RGB(0, 220, 0));
@@ -183,29 +203,43 @@ namespace
 			SelectObject(hdc, previous_brush);
 			SelectObject(hdc, previous_pen);
 
-			// Reference figure for the raw camera feed under conventional compression.
-			const auto source_kbit = static_cast<int>(
-				state->width * state->height * 24.0 * source_fps * 0.05 / 1000.0);
+			wchar_t text[160];
+			swprintf_s(text, L"Original: %0.1f fps camera, %0.1f fps analysed", pipeline.source_fps(),
+			           pipeline.processed_fps());
+			draw_caption(hdc, left_x, pane_y, 0, text);
+			swprintf_s(text, L"%d faces (peak detector score %0.2f)", state->face_count, state->peak_confidence);
+			draw_caption(hdc, left_x, pane_y, 1, text);
 
-			wchar_t text[128];
-			swprintf_s(text, L"Original: %0.1f fps, %d kbit/s reference, %d faces (peak %0.2f)", source_fps,
-			           source_kbit, state->face_count, state->peak_confidence);
-			TextOutW(hdc, left_x, pane_y + video_height + layout_padding, text, static_cast<int>(wcslen(text)));
+			const receiver_view& lowban = state->lowban;
+			swprintf_s(text, L"low-ban: %0.1f kbit/s (%0.1f geometry), link %0.1f kbit/s",
+			           lowban.payload_kbit_per_second, state->lowban_geometry_kbit_per_second,
+			           lowban.link_kbit_per_second);
+			draw_caption(hdc, lowban_x, pane_y, 0, text);
+			swprintf_s(text, L"PSNR %0.1f dB, face %0.1f dB, landmark error %s", lowban.quality.psnr,
+			           lowban.quality.weighted_psnr, expression_text(lowban).c_str());
+			draw_caption(hdc, lowban_x, pane_y, 1, text);
+			swprintf_s(text, L"last picture: %s, %d blocks", state->lowban_keyframe ? L"startup keyframe"
+			           : state->lowban_warped ? L"warped delta" : L"delta", state->lowban_updated_blocks);
+			draw_caption(hdc, lowban_x, pane_y, 2, text);
 
-			swprintf_s(text, L"Traditional wire: %0.1f kbit/s, PSNR %0.1f dB, face %0.1f dB, %s %d blocks",
-			           state->traditional_kbit_per_second, state->traditional_quality.psnr,
-			           state->traditional_quality.weighted_psnr,
-			           state->traditional_keyframe ? L"keyframe" : L"delta",
-			           state->traditional_updated_blocks);
-			TextOutW(hdc, traditional_x, pane_y + video_height + layout_padding, text,
-			         static_cast<int>(wcslen(text)));
-
-			swprintf_s(text, L"Neural wire: %0.1f kbit/s, PSNR %0.1f dB, face %0.1f dB, %s %d patches",
-			           state->neural_kbit_per_second, state->neural_quality.psnr,
-			           state->neural_quality.weighted_psnr, state->neural_keyframe ? L"keyframe" : L"delta",
-			           state->neural_updated_patches);
-			TextOutW(hdc, neural_x, pane_y + video_height + layout_padding, text,
-			         static_cast<int>(wcslen(text)));
+			const receiver_view& baseline = state->baseline;
+			if (baseline.picture.empty() && !state->baseline_status.empty())
+			{
+				const std::wstring status(state->baseline_status.begin(), state->baseline_status.end());
+				draw_caption(hdc, baseline_x, pane_y, 0, status.c_str());
+			}
+			else
+			{
+				swprintf_s(text, L"H.264 baseline: %0.1f kbit/s, link %0.1f kbit/s",
+				           baseline.payload_kbit_per_second, baseline.link_kbit_per_second);
+				draw_caption(hdc, baseline_x, pane_y, 0, text);
+				swprintf_s(text, L"PSNR %0.1f dB, face %0.1f dB, landmark error %s", baseline.quality.psnr,
+				           baseline.quality.weighted_psnr, expression_text(baseline).c_str());
+				draw_caption(hdc, baseline_x, pane_y, 1, text);
+				swprintf_s(text, L"%d kbit/s constant rate, %d fps, face offset %s", baseline_kbit_per_second,
+				           geometry_hz, state->baseline_face_offset ? L"on" : L"off");
+				draw_caption(hdc, baseline_x, pane_y, 2, text);
+			}
 		}
 
 		const std::string status = pipeline.status();
@@ -232,8 +266,8 @@ namespace
 			case IDM_ABOUT:
 				DialogBoxW(instance, MAKEINTRESOURCEW(IDD_ABOUTBOX), wnd, about_proc);
 				break;
-			case IDM_AUTOENCODER:
-				pipeline.reset_training();
+			case IDM_RECORD:
+				pipeline.set_recording(!pipeline.recording());
 				break;
 			case IDM_FACEDETECT:
 				pipeline.set_show_faces(!pipeline.show_faces());
@@ -263,6 +297,7 @@ namespace
 					SetMenuItemInfoW(menu, id, FALSE, &info);
 				};
 
+				check(IDM_RECORD, pipeline.recording());
 				check(IDM_FACEDETECT, pipeline.show_faces());
 				check(IDM_FACELANDMARK, pipeline.show_landmarks());
 				check(IDM_LANDMARKOVERLAY, pipeline.show_overlay());
@@ -362,13 +397,27 @@ namespace
 		// Unbuffered, so a run that dies part-way still leaves every check it reached in the log.
 		setvbuf(stdout, nullptr, _IONBF, 0);
 
-		return evaluate ? run_sample_evaluation() : run_self_test();
+		if (evaluate) return run_sample_evaluation();
+
+		// The H.264 and clip checks drive Media Foundation from this thread.
+		const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+		int result = 1;
+		{
+			const media_foundation media;
+			result = run_self_test();
+		}
+		if (SUCCEEDED(com)) CoUninitialize();
+		return result;
 	}
 }
 
 int APIENTRY wWinMain(_In_ const HINSTANCE hinstance, _In_opt_ HINSTANCE, _In_ const LPWSTR command_line,
                       _In_ const int show_command)
 {
+	if (command_line != nullptr && wcsstr(command_line, L"/probe-h264") != nullptr)
+	{
+		return run_h264_probe();
+	}
 	if (command_line != nullptr && wcsstr(command_line, L"/test") != nullptr)
 	{
 		return run_console_mode(false);
@@ -402,8 +451,8 @@ int APIENTRY wWinMain(_In_ const HINSTANCE hinstance, _In_opt_ HINSTANCE, _In_ c
 	RegisterClassExW(&wcex);
 
 	const HWND wnd = CreateWindowW(class_name, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-	                               video_width * 3 + layout_padding * 8, video_height + 220, nullptr, nullptr,
-	                               hinstance, nullptr);
+	                               video_width * 3 + layout_padding * 8, video_height + minimum_pane_y * 2 + 60,
+	                               nullptr, nullptr, hinstance, nullptr);
 	if (wnd == nullptr)
 	{
 		if (com_ready) CoUninitialize();

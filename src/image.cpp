@@ -44,6 +44,55 @@ bool decode_yuy2(video_frame& out, const uint8_t* buffer, const size_t buffer_le
 	return true;
 }
 
+void encode_yuy2(const video_frame& frame, std::vector<uint8_t>& buffer)
+{
+	const int width = frame.width();
+	const int height = frame.height();
+	buffer.resize(static_cast<size_t>(width) * height * 2);
+	for (int y = 0; y < height; ++y)
+	{
+		const uint8_t* luma = frame.luma.row(y);
+		const uint8_t* cb = frame.cb.row(y);
+		const uint8_t* cr = frame.cr.row(y);
+		uint8_t* out = buffer.data() + static_cast<size_t>(y) * width * 2;
+		for (int x = 0; x < width / 2; ++x)
+		{
+			out[x * 4 + 0] = luma[x * 2 + 0];
+			out[x * 4 + 1] = cb[x];
+			out[x * 4 + 2] = luma[x * 2 + 1];
+			out[x * 4 + 3] = cr[x];
+		}
+	}
+}
+
+bool decode_nv12(video_frame& out, const uint8_t* buffer, const size_t buffer_len, const int width, const int height,
+                 const int stride, const int plane_rows)
+{
+	if (buffer == nullptr || width <= 1 || height <= 1 || (width & 1) != 0 || (height & 1) != 0) return false;
+	if (stride < width || plane_rows < height) return false;
+	if (buffer_len < static_cast<size_t>(stride) * plane_rows + static_cast<size_t>(stride) * (height / 2)) return false;
+
+	out.luma.resize(width, height);
+	out.cb.resize(width / 2, height);
+	out.cr.resize(width / 2, height);
+	for (int y = 0; y < height; ++y)
+		std::memcpy(out.luma.row(y), buffer + static_cast<size_t>(y) * stride, width);
+
+	const uint8_t* chroma = buffer + static_cast<size_t>(stride) * plane_rows;
+	for (int y = 0; y < height; ++y)
+	{
+		const uint8_t* row = chroma + static_cast<size_t>(y / 2) * stride;
+		uint8_t* cb = out.cb.row(y);
+		uint8_t* cr = out.cr.row(y);
+		for (int x = 0; x < width / 2; ++x)
+		{
+			cb[x] = row[x * 2];
+			cr[x] = row[x * 2 + 1];
+		}
+	}
+	return true;
+}
+
 void yuv_to_bgra(const video_frame& frame, std::vector<uint8_t>& bgra)
 {
 	const int w = frame.width();

@@ -1,8 +1,8 @@
 // The processing pipeline.
 //
 // Three participants, each with one job:
-//   capture thread  - pulls frames from the camera
-//   analysis thread - detects faces, landmarks them, and encodes the low bandwidth pane
+//   capture thread  - pulls frames from the camera, and records them to a clip on request
+//   analysis thread - detects and landmarks faces, and runs both wires of the call session
 //   UI thread       - only ever blits the most recent finished result
 // The threads exchange whole immutable frames through `engine::latest`, so no partially
 // updated state can ever reach the screen.
@@ -13,35 +13,11 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <vector>
 
-#include "codec.h"
 #include "face.h"
 #include "image.h"
 #include "landmarks.h"
-
-struct render_state
-{
-	std::vector<uint8_t> source_bgra; // panel 1, top-down BGRA
-	image_u8 traditional; // panel 2, prioritised DCT reconstruction
-	image_u8 neural; // panel 3, prioritised autoencoder reconstruction
-	std::vector<rect_i> faces; // boxes the landmarker was given, in frame coordinates
-	int width = 0;
-	int height = 0;
-	int face_count = 0;
-	int training_steps = 0;
-	float peak_confidence = 0.0f; // best detector score in the frame, before thresholding
-	int64_t traditional_bits = 0;
-	double traditional_kbit_per_second = 0.0;
-	int traditional_updated_blocks = 0;
-	bool traditional_keyframe = false;
-	int64_t neural_bits = 0; // bytes emitted for this packet, including landmark accounting
-	double neural_kbit_per_second = 0.0;
-	int neural_updated_patches = 0;
-	bool neural_keyframe = false;
-	reconstruction_quality traditional_quality;
-	reconstruction_quality neural_quality;
-};
+#include "session.h"
 
 class engine
 {
@@ -63,13 +39,15 @@ public:
 	void set_show_landmarks(const bool v) { show_landmarks_.store(v); }
 	bool show_landmarks() const { return show_landmarks_.load(); }
 
-	// Whether the received geometry is drawn over panels 2 and 3. Landmarking still runs and
-	// is still charged to both wires when this is off; it is a reference overlay, not a codec
-	// input, so hiding it shows the reconstructions as a viewer would actually receive them.
+	// Whether the received geometry is drawn over the low-ban picture. Landmarking still runs
+	// and is still charged to the wire when this is off; it is a reference overlay, not a
+	// codec input, so hiding it shows the picture as a viewer would actually receive it.
 	void set_show_overlay(const bool v) { show_overlay_.store(v); }
 	bool show_overlay() const { return show_overlay_.load(); }
 
-	void reset_training();
+	// Records the camera to samples\clip-<time>.mp4 until switched off again.
+	void set_recording(const bool v) { recording_.store(v); }
+	bool recording() const { return recording_.load(); }
 
 	std::shared_ptr<const render_state> latest() const;
 	// Changes whenever there is something new to paint: a published frame or a new status.
@@ -90,8 +68,8 @@ private:
 	std::atomic<bool> show_faces_{true};
 	std::atomic<bool> show_landmarks_{true};
 	std::atomic<bool> show_overlay_{true};
+	std::atomic<bool> recording_{false};
 	std::atomic<bool> stop_requested{false};
-	std::atomic<bool> reset_requested{false};
 
 	std::atomic<double> source_fps_{0.0};
 	std::atomic<double> processed_fps_{0.0};
@@ -108,12 +86,6 @@ private:
 
 	face_detector detector;
 	shape_predictor landmarks;
-	transform_codec traditional_codec;
-	temporal_transform_stream traditional_stream;
-	temporal_landmark_stream traditional_landmarks;
-	patch_autoencoder codec;
-	temporal_patch_stream neural_stream;
-	temporal_landmark_stream neural_landmarks;
 
 	std::thread capture_thread;
 	std::thread analysis_thread;

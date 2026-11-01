@@ -15,6 +15,7 @@ endif()
 enable_language(RC)
 
 add_executable(low-ban WIN32
+    src/baseline.cpp
     src/capture.cpp
     src/codec.cpp
     src/draw.cpp
@@ -26,11 +27,14 @@ add_executable(low-ban WIN32
     src/landmarks.cpp
     src/main.cpp
     src/selftest.cpp
+    src/session.cpp
+    src/warp.cpp
     src/res.rc
     src/app.manifest
 )
 
 target_sources(low-ban PRIVATE
+    src/baseline.h
     src/capture.h
     src/codec.h
     src/draw.h
@@ -39,6 +43,8 @@ target_sources(low-ban PRIVATE
     src/image.h
     src/landmarks.h
     src/res.h
+    src/session.h
+    src/warp.h
 )
 
 target_compile_features(low-ban PRIVATE cxx_std_17)

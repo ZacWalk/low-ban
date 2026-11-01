@@ -19,12 +19,12 @@ IDC_APP MENU
 BEGIN
     POPUP "&File"
     BEGIN
+        MENUITEM "&Record clip",                IDM_RECORD
+        MENUITEM SEPARATOR
         MENUITEM "E&xit",                       IDM_EXIT
     END
     POPUP "&View"
     BEGIN
-        MENUITEM "&Reset neural training",      IDM_AUTOENCODER
-        MENUITEM SEPARATOR
         MENUITEM "Face &detect",                IDM_FACEDETECT
         MENUITEM "Face &landmarking",           IDM_FACELANDMARK
         MENUITEM "Landmark &overlay",           IDM_LANDMARKOVERLAY
@@ -45,7 +45,7 @@ FONT 8, "MS Shell Dlg"
 BEGIN
     ICON            IDI_APP,IDC_STATIC,14,14,21,20
     LTEXT           "low-ban - low bandwidth video experiment",IDC_STATIC,42,14,150,8,SS_NOPREFIX
-    LTEXT           "Face landmarking and a patch autoencoder.",IDC_STATIC,42,26,150,8
+    LTEXT           "Landmark-warped codec against H.264.",IDC_STATIC,42,26,150,8
     DEFPUSHBUTTON   "OK",IDOK,143,47,50,14,WS_GROUP
 END
 

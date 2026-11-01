@@ -1,51 +1,58 @@
 # low-ban design
 
-Low bandwidth video experiment. Three panes compare the raw webcam feed, a traditional
-transform codec and a learned patch codec on the same frame. Both low bandwidth approaches
-prioritise facial features and transmit the face geometry separately from the picture. The
-premise is that non-verbal communication survives extreme compression if scarce bits and
-training capacity are concentrated around expression-bearing regions.
+Low bandwidth video experiment. Three panes compare the raw webcam feed, low-ban - a
+face-prioritised transform codec whose receiver animates the face from transmitted landmarks -
+and an H.264 baseline given the same bitrate and the same face boxes. The premise is that
+non-verbal communication survives extreme compression if scarce bits are concentrated around
+expression-bearing regions and the face's geometry travels separately from its pixels.
 
 This file describes what the code does now. [todo.md](todo.md) lists what it does not.
 
-Everything is plain C++17 on the Win32 API. There is no ONNX or DirectML runtime and no
-Windows AI API. The one piece not written here is the face detector's network design and
-weights, which come from [libfacedetection](https://github.com/ShiqiYu/libfacedetection) under
-a 3-clause BSD licence; the inference code was rewritten for this application. This is a demo:
-the goal is to be small and legible, not to be robust in every lighting condition.
+Everything is plain C++17 on the Win32 API. The H.264 baseline and clip recording use the
+encoder, decoder and file transforms that ship with Windows' Media Foundation; there is no ONNX
+or DirectML runtime and no Windows AI API. The one piece not written here is the face
+detector's network design and weights, which come from
+[libfacedetection](https://github.com/ShiqiYu/libfacedetection) under a 3-clause BSD licence;
+the inference code was rewritten for this application. This is a demo: the goal is to be small
+and legible, not to be robust in every lighting condition.
 
 ## Layout
 
 ```
 src/
   main.cpp        Win32 window, menu, painting. No image processing.
-  engine.h/.cpp   Threading and the per-frame pipeline.
-  capture.h/.cpp  Media Foundation webcam capture.
-  image.h/.cpp    Image containers, YUY2 decoding, resize, blur, Sobel, contrast stretch.
+  engine.h/.cpp   Threads, capture and clip recording, publishing results.
+  session.h/.cpp  One simulated call: face tracking, both wires, clocks and metrics.
+  capture.h/.cpp  Media Foundation webcam capture, clip recording and replay.
+  image.h/.cpp    Image containers, YUY2 and NV12 conversion, resize, blur, Sobel.
   face.h/.cpp     CNN face detector.
   face-model.cpp  Generated detector weights.
-  landmarks.h/.cpp 68-point landmark regressor and model file reader.
-  codec.h/.cpp    Prioritised DCT codec, patch autoencoder and quality metrics.
-  evaluate.cpp    Offline PNG sample evaluation through Windows Imaging Component.
+  landmarks.h/.cpp 68-point landmark regressor, model file reader, landmark wire, jitter
+                  filter and landmark error.
+  warp.h/.cpp     Integer Delaunay triangulation and piecewise-affine face warp.
+  codec.h/.cpp    Low-ban transform codec, its wire stream and quality metrics.
+  baseline.h/.cpp H.264 baseline wire over Media Foundation's encoder and decoder.
+  evaluate.cpp    Offline evaluation of PNG stills and recorded clips.
   draw.h/.cpp     Anti-aliased line drawing over an 8-bit image.
   selftest.cpp    Headless checks (`/test`).
 exe/
   shape_predictor_68_face_landmarks.dat   landmark model (not produced by this repo)
-samples/          still images used by `dd.ps1 evaluate`
+samples/          stills and recorded clips used by `dd.ps1 evaluate`
 dd.ps1            build / run / test / evaluate / clean
 ```
 
-Dependency direction is strictly one way: `main` depends on `engine`, `engine` depends on the
-processing modules, and the processing modules depend only on `image`. `image` and `draw`
-have no Windows dependency at all, which is what makes the self test possible without a
-camera or a window.
+Dependency direction is strictly one way: `main` depends on `engine`, `engine` on `session`
+and `capture`, `session` on the processing modules, and the processing modules on `image`.
+`image`, `draw` and `warp` have no Windows dependency at all, which is what makes the self test
+possible without a camera or a window. `baseline` and `capture` hide Media Foundation behind
+Windows-free headers.
 
 ## Threading
 
 | Thread   | Responsibility |
 | -------- | -------------- |
-| capture  | Blocks on `IMFSourceReader::ReadSample`, decodes YUY2 into planes, publishes the frame. |
-| analysis | Detects faces, runs landmarks, produces both low bandwidth panes, publishes a `render_state`. |
+| capture  | Blocks on `IMFSourceReader::ReadSample`, decodes YUY2 into planes, publishes the frame, and writes it to a clip while recording. |
+| analysis | Detects faces, runs landmarks, runs the call session, publishes a `render_state`. Owns the H.264 transforms, so it initialises COM. |
 | UI       | On a timer, repaints if the generation counter moved: a new frame or a new status. Blits three bitmaps and some text. |
 
 Handover is by `std::shared_ptr` to an immutable value, swapped under a short mutex. A
@@ -76,33 +83,87 @@ retrying a reader that is finished. Setting a status moves the generation counte
 does: with no frames arriving, nothing else would make the window repaint, and the status
 would stay off screen.
 
-## Comparison
+### Recorded clips
 
-All three panes are produced simultaneously so a changing webcam scene cannot favour one
-approach. Face detection and landmark prediction run first. They produce one 8-bit importance
-map used by both codecs and by evaluation: background pixels have weight 32, the detected
+File > Record clip writes the camera to `samples/clip-<local time>.mp4` until it is chosen
+again. Frames are written on an even 15 Hz cadence and stamped at exact intervals, so a clip
+replays at precisely its frame rate whatever the camera's own timing was. The picture is packed
+back into YUY2 and handed to a Media Foundation sink writer as H.264 at 4 Mbit/s - about 0.9
+bits per pixel, high enough to be a faithful source for both wires (the self test requires
+better than 30 dB on a round trip). A clip is finished when recording stops, when the camera
+fails and when the app closes, because an unfinished MP4 cannot be played back.
+
+`clip_reader` replays a clip as captured frames through the source reader's advanced video
+processor, as YUY2 or, failing that, NV12, at 640x480 whatever size it was recorded at.
+Recorded clips show whoever was in front of the camera, so `samples/*.mp4` is ignored by git.
+
+## The call session
+
+`call_session` is one simulated call. Every captured frame goes in with its timestamp in
+seconds and the face analysis; out comes what both receivers show. The live engine passes
+steady-clock time and `evaluate` passes clip timestamps, so the offline numbers are measured on
+exactly the code the window runs.
+
+The sender's analysis - `face_tracker` - detects faces at the full capture size, runs the
+landmark model on each box and feeds each box the model implies back to the next frame. Its
+68 points per face produce the importance map: background pixels have weight 32, the detected
 face rectangle has weight 96, and discs around landmarks 17 through 67 (brows, eyes, nose and
-mouth) have weight 255. Both approaches send their own copy of the compressed temporal
-landmark stream, so neither receives geometry for free.
+mouth) have weight 255.
+
+Pictures are coded at half the capture size in each direction, 320x240, and scaled back up for
+display and measurement. Detection and landmarking keep the full 640x480, where the features
+are. Every practical low-rate system drops resolution first: at 1,200 bytes a picture the full
+frame is 0.03 bits per pixel, and the halved frame four times that.
+
+Two clocks run, each on an even cadence with a few milliseconds of slack so a 30 fps camera
+lands on every tick rather than slipping to every third frame:
+
+| Clock | Rate | Carries |
+| ----- | ---- | ------- |
+| geometry | 15 Hz | a low-ban landmark packet, and one H.264 frame |
+| picture | 5 Hz | a low-ban picture packet, capped at 1,200 bytes after the startup keyframe |
+
+On a tick where both are due, geometry goes first, so the picture packet predicts from the
+newest landmarks. The low-ban receiver redraws at the geometry rate: between picture packets it
+shows its last decoded picture with the face warped onto the newest received landmarks, so a
+mouth or a brow moves 15 times a second even though pictures arrive five times. H.264 runs at
+the same 15 frames a second, so both receivers update equally often.
+
+The window shows three caption lines under each received pane: rate, quality, and what the last
+packet was. Rates are rolling ten-second averages of serialized bytes - picture and geometry
+payload for low-ban, the encoder's output for H.264 - and include and then age out each wire's
+startup picture.
+
+### The link estimate
+
+Payload is not what a link has to carry. Each pane also shows a link figure: payload plus 40
+bytes of IPv4, UDP and RTP header on every packet of every stream, plus an allowance for the
+audio a real call cannot do without - 6 kbit/s of low-rate speech in 60 ms packets, 11.3
+kbit/s with its headers. Nothing is sent through a socket; this is accounting, not a network
+measurement, and it excludes retransmission, error correction and congestion. At 15 Hz, a
+moving face's geometry packets cost about as much again in headers as in landmarks (see
+[todo.md](todo.md)).
+
+## Low-ban
 
 ### Packet scheduling
 
-Both codecs face the same problem: far more of the frame wants to change each interval than
-the packet budget can carry. They resolve it the same way, and the rule is the single most
-important thing in this repository.
+Far more of the frame wants to change each interval than the packet budget can carry. The
+transform stream resolves that with one rule, and the rule is the single most important thing
+in this repository.
 
-A unit (an 8x8 transform block, or a 20x20 latent patch) competes on
+An 8x8 transform block competes on
 
 ```
 priority = importance_gain * distortion_removed / bytes
 ```
 
 `distortion_removed` is how much squared pixel error this record would actually retire,
-measured against what was transmitted rather than against the source. For the transform codec
-that is exact rather than a proxy: the DCT here is orthonormal, so the sum of squared
-dequantised coefficient errors is the block's pixel-domain squared error. `bytes` is the
-serialized length of the record, so the ranking buys the most error reduction per byte.
-`importance_gain` runs from 1 to 8 across the importance map.
+measured against what the decoder holds rather than against the source. That is exact rather
+than a proxy: the DCT here is orthonormal, so the sum of squared dequantised coefficient errors
+is the block's pixel-domain squared error. `bytes` is the serialized length of the record, so
+the ranking buys the most error reduction per byte. `importance_gain` runs from 1 to 8 across
+the importance map.
 
 The gain being *bounded* is the point. An importance term that can outweigh distortion
 outright does not prioritise the face, it starves everything else forever, and the visible
@@ -111,33 +172,64 @@ low importance, so no matter how wrong it is it never outbids the face that keep
 its new position.
 
 A bounded gain is still not enough on its own, because the face regenerates high-priority
-candidates every interval. Each stream therefore also carries a per-unit counter of how many
-packets a unit with error has been deferred. At eight packets it is promoted ahead of every
-unit still inside its deadline, and the promoted set is ordered among itself by the same
-rate-distortion rule. Importance decides the order in which units are served; it can never
-decide that a unit is not served. That bound is what removes the ghosting, at the cost of a
+candidates every interval. The stream therefore also carries a per-block counter of how many
+packets a block with error has been deferred. At eight packets it is promoted ahead of every
+block still inside its deadline, and the promoted set is ordered among itself by the same
+rate-distortion rule. Importance decides the order in which blocks are served; it can never
+decide that a block is not served. That bound is what removes the ghosting, at the cost of a
 face that visibly pauses for an interval or two while a large vacated region is repaired.
 
-Selection and serialization are separate passes. Units are chosen by priority, then written in
-index order so each record can carry the gap from the previous one instead of an absolute
+Selection and serialization are separate passes. Blocks are chosen by priority, then written
+in index order so each record can carry the gap from the previous one instead of an absolute
 index. A gap never needs more bytes than the absolute index it replaces, so a budget reserved
 during selection always holds.
 
-### Traditional transform codec
+### Transform codec
 
-Panel 2 is a block transform codec in the same broad family as MPEG. Each 8x8 luma block is
-level shifted, transformed by an orthonormal DCT, quantised and inverse transformed. Higher
-spatial frequencies receive progressively coarser quantisation. The importance map lowers a
-block's quantiser from 34 toward 8, preserving more coefficients in face-feature blocks. The
-mapping is snapped to a ladder of eight steps, because a landmark disc drifting by one pixel
-would otherwise re-quantise blocks whose pixels never moved, and every one of those blocks
-then has to be re-sent for no visible gain.
+Pictures are coded by a block transform codec in the same broad family as MPEG. Each 8x8 luma
+block is level shifted, transformed by an orthonormal DCT, quantised and inverse transformed.
+Higher spatial frequencies receive progressively coarser quantisation. The importance map
+lowers a block's quantiser from 34 toward 8, preserving more coefficients in face-feature
+blocks. The mapping is snapped to a ladder of eight steps, because a landmark disc drifting by
+one pixel would otherwise re-quantise blocks whose pixels never moved, and every one of those
+blocks then has to be re-sent for no visible gain.
+
+#### The landmark warp
+
+Before a single block is coded, both ends move the face they hold to where the newest
+transmitted geometry says it is. Each face's 68 landmarks, plus ten points extrapolated above
+the brows so the forehead moves with them, are triangulated where they are now, and every pixel
+inside that mesh is sampled from the matching triangle where they were when the held picture
+was decoded. Every block the warp changes is then re-predicted from the warped picture at the
+quantiser it already holds; every other block keeps its coefficients exactly.
+
+The warp costs nothing on the wire: both ends run `warp_faces` on the same reference picture
+with the same transmitted geometry, the encoder's copy from `temporal_landmark_stream::
+transmitted()` and the decoder's from what it decoded. It is integer arithmetic throughout - an
+exact Bowyer-Watson Delaunay triangulation with 64-bit predicates, barycentric mapping in
+fixed point, bilinear sampling in 1/256 pixel steps - so two endpoints agree whatever compiler
+built them. Repeated points, such as closed lips on the two-pixel landmark grid, are left out
+of the triangulation rather than producing zero-area triangles.
+
+Landmarks are not always right: a hand over the face or a lost track moves the mesh without
+moving the face. The encoder therefore commits the warp only when it brings the blocks it
+touches closer to the source than leaving them alone would, and the packet says so in its
+header. Otherwise it *refuses* the warp, and that is announced too - in a bare ten-byte header
+if there is nothing else to send, but only to a receiver that is currently animating. Between
+picture packets the receiver animates its picture onto newer geometry unless the encoder's last
+word was a refusal; a picture that defies its geometry therefore costs one header and is then
+shown as it is. A packet with no records and no refusal to announce is never sent, and its warp
+is not committed: the next packet simply warps from the same reference to newer geometry.
+
+On synthetic frames whose face moves by the same warp the codec predicts with - a mechanism
+check, not a claim about real faces - the self test sends a drifting, mouth-opening face for
+2,420 bytes at 31.3 dB with geometry against 7,871 bytes at 30.6 dB without.
 
 #### Prediction
 
-A block is coded against a predictor, and there are two to choose from:
+What remains after the warp is coded against a predictor, and there are two to choose from:
 
-- what the decoder already holds for that block, or
+- what the decoder already holds for that block, warped or not, or
 - a *motion compensated* window of the previous decoded frame, displaced by a vector.
 
 Translation is the one thing a block transform cannot express, and a head in front of a webcam
@@ -178,7 +270,8 @@ is really holding.
 
 #### On the wire
 
-Transform packets use the `LT` signature followed by a version, keyframe flag, dimensions and
+Transform packets use the `LT` signature, version 3, a flags byte - bit 0 keyframe, bit 1 warp
+committed, bit 2 warp refused, never two at once - then the coded width and height and the
 record count. Each record is
 
 | Field | Encoding |
@@ -194,109 +287,120 @@ Coefficients are visited in a low-frequency-first zigzag scan, so the zero runs 
 surviving coefficients are long. One token byte carries a zero run up to 15 and a level in
 -7..7, which is what almost every motion-compensated residual coefficient turns out to be;
 a zero byte escapes to full variable-length values. Bits 2 and 3 are what make a block that
-simply moved with its neighbours cost two bytes in total.
+simply moved with its neighbours cost two bytes in total. The records are byte aligned and not
+entropy coded, and that framing is about two fifths of the startup keyframe (see
+[todo.md](todo.md)).
 
-The live wire emits one complete keyframe at startup, so panel 2 begins with the whole scene
-rather than neutral-grey blocks that fill in gradually. On the sample set this one-time
-startup payload averages 322.4 kbit at 36.84 dB PSNR. It is included in the displayed rolling
-bitrate and is not subject to the steady-state packet cap.
+The live wire emits one complete keyframe at startup, so the receiver begins with the whole
+scene rather than neutral-grey blocks that fill in gradually. On the sample set this one-time
+startup picture, with its geometry keyframe, averages 95.6 kbit at 32.94 dB PSNR. It is
+included in the displayed rolling bitrate and is not subject to the steady-state packet cap.
+After startup, picture packets are capped at 1,200 bytes, 48 kbit/s at 5 Hz. There are no
+periodic decoder resets, so an established scene is not replaced by grey every few seconds.
 
-After startup, the wire runs at 5 Hz with packets capped at 1,200 bytes. Landmarks use the
-compressed temporal geometry format described below. With the two-face maximum in the sample
-set, the configured ongoing payload reference is 54.4 kbit/s when each landmark delta stays
-within 80 bytes. The 1,200-byte image packet cap is hard; the combined rate is not, because
-large landmark escapes can exceed that assumption. There are no periodic decoder resets, so
-an established scene is not replaced by grey every few seconds.
+Decoding is transactional: malformed or truncated input, unknown flags and contradictory flags
+are rejected before decoder state is replaced.
 
-Decoding is transactional: malformed or truncated input is rejected before decoder state is
-replaced.
+### Landmark wire
 
-### Learned patch codec
+Landmarks have their own serialized temporal stream, sent at 15 Hz and charged to low-ban.
+Coordinates are quantised to two-pixel units, which is one pixel of the coded picture.
+Keyframes contain absolute variable-length coordinates. A delta packet describes each face as
+one rigid shift - the median of its points' motion, which is what the head did - plus per-point
+residuals, which are what the expression did. Residuals are packed as two nibbles per point,
+-7 through 7, with variable-length escapes for larger motion. Each face takes whichever of four
+layouts is shortest: with or without the shift, listing every point or only those whose
+residual is not zero behind a 68-bit mask. A still or rigidly moving face costs a few bytes
+rather than one per point, a talking mouth lists only the points that moved, and the worst
+small-motion face still fits in 80 bytes. Unchanged geometry emits no packet.
 
-The frame is cut into fixed 20x20 luma patches. Each patch's mean is measured, quantised to one
-byte and subtracted; only the remaining texture goes through the network:
+Landmark packets use the `LM` signature, version 2, a keyframe flag and the face count, and are
+decoded transactionally. Faces are currently paired by detector order rather than by a
+persistent track identifier.
 
-```
-analysis    400 -> tanh(3)
-synthesis     3 -> tanh(32) -> linear(400)
-```
+Before transmission the landmarks pass through a "one euro" filter (Casiez, Roussel and Vogel,
+2012), whose cut-off rises with speed: 1.5 Hz for a still landmark, about 7.5 Hz for one moving
+at 200 pixels a second. Raw landmarks jitter by a grid step from frame to frame, which at 15 Hz
+costs geometry bytes and makes the receiver's warped face shimmer, while a fast cut-off during
+real motion keeps lips and brows from lagging. The filter is sender-side only: the importance
+map and the landmark error use the raw landmarks.
 
-Brightness is by far the highest variance direction in a patch, and eight bits buy it outright
-for less than a bottleneck unit spent trying to represent it. A patch therefore costs four
-bytes exactly as before - one mean and three code units - but the bottleneck only has to carry
-shape. On the sample set that swap alone is worth several dB at an unchanged rate.
+View > Landmark overlay draws the received geometry over the low-ban picture. Landmarking is a
+bit-allocation, prediction and measurement signal, not a picture element, so hiding the overlay
+leaves prioritisation, the warp and the geometry bitrate untouched and shows the picture as a
+viewer would actually receive it. View > Face landmarking is the ablation: no landmark
+weighting, no warp, no geometry stream, no face offset for H.264.
 
-The two halves are deliberately asymmetric. Analysis is a single layer because it runs once per
-patch and only has to produce three numbers; synthesis carries the capacity because it is the
-side that has to invent 400 pixels from them. That is the shape every practical learned codec
-settles on.
+## H.264 baseline
 
-Training is online on importance-weighted mean squared error, 256 randomly chosen patches per
-captured frame. Each weight is stepped by its gradient divided by a running root mean square of
-that gradient, so every layer moves at its own pace rather than at a rate chosen for the
-worst-scaled one; the learning rate is consequently a normalised step, far smaller than a plain
-SGD rate would be. Face features contribute up to eight times the gradient of background
-pixels. Weights are initialised uniformly at `±1/sqrt(fan_in)`.
+The third pane is H.264 from the encoder and decoder transforms that ship with Windows. It is a
+real serialized wire: the picture shown is what the decoder made of the encoder's bytes, and
+every byte the decoder needs - including the parameter sets, charged to the first frame if the
+encoder keeps them out of band - is counted. Access unit delimiters and SEI messages are
+dropped before counting, because the decoder needs neither: this encoder opens every frame with
+a delimiter and its first frame with about 300 bytes of SEI, and charging them would handicap
+the baseline.
 
-The wire runs independently of analysis at 5 Hz. Every three seconds it emits a keyframe with
-a ten-byte header followed by the full four-bytes-per-patch raster: `32 x 24 x 4 = 3,072`
-bytes for a 640x480 frame. Other packets contain only changed patches: a variable-length gap
-from the previous patch index, then signed deltas for the mean and the three code units.
-Candidates are scheduled by the same rate-distortion rule and the same eight-packet deadline
-as the transform stream, with squared latent change standing in for pixel distortion, since
-the decoder here is a non-linear network and Parseval does not apply. A mean step and a code
-step are each worth roughly one grey level at the output, so they are summed unweighted. Delta
-packets are capped at 1,500 bytes. If no quantised code changed, no image packet is emitted and
-the decoder holds its previous reconstruction.
+It codes the same 320x240 luma as low-ban, with flat grey chroma that costs it next to
+nothing, at a constant 52 kbit/s: the low-ban picture cap plus a typical single-face geometry
+stream, so both wires spend about the same. Main profile with CABAC, which is worth about a
+quarter of the bytes here; High profile streams from this encoder in low-latency mode did not
+survive the in-box decoder past the first few macroblocks of each slice. Low-latency mode on
+both transforms, no B-frames, and a single key frame at the start like low-ban's.
 
-Latent packets use the `LB` signature followed by a version, keyframe flag, dimensions and
-record count. Keyframes store the mean and code bytes in raster order. As with the transform
-stream, decoding is transactional and reconstructed pixels come from decoder-owned codes.
+It is fed the same face boxes the importance map is built from. The encoder takes one region
+of interest per frame, so several faces share their union, and that region is coded six
+quantiser steps finer than the rest - half the quantiser, comparable to low-ban's average face
+emphasis. `evaluate` runs H.264 with and without the offset, so face priority can be judged on
+a competitive codec on its own, and reports whether the encoder honoured the offset at all.
 
-Landmarks have their own serialized temporal stream. Coordinates are quantised to two-pixel
-units. Keyframes contain absolute variable-length coordinates; ordinary packets pack changes
-from -7 through 7 into four-bit nibbles and use variable-length escapes for larger motion.
-A small-motion 68-point face delta fits within 80 bytes in the self test, and unchanged
-geometry emits no packet. Larger-motion escapes can exceed 80 bytes because landmark packets
-are not hard-capped. Panel 3 draws only geometry received by this decoder.
+When the transforms are missing, the pane says why and the self test skips its H.264 checks
+rather than failing. They can also be present and broken. GitHub's Windows Server 2025 runners
+register an H.264 encoder (`mfh264enc.dll` 26100.7309) that is an older build than the rest of
+their Media Foundation (26100.32995 and later), and it crashes on its own worker thread during
+the first frame; installing Server's Media Foundation feature succeeds without a restart but
+leaves the same encoder. No error code reports the crash, and no handler can recover from it,
+so before the first H.264 wire or clip opens, the program runs one short round trip in a child
+copy of itself (`/probe-h264`), which suppresses the crash dialog. If the child crashes or
+hangs, the encoder is unavailable for the rest of the process: the pane, `evaluate` and clip
+recording say so, and the self test skips. Ordinary failures, such as a missing transform, pass
+the probe and are reported by the call that meets them.
 
-Landmark packets use the `LM` signature and carry their own keyframe flag and face count.
-Each image codec has a separate landmark encoder and decoder, so geometry bytes are charged
-to both approaches. Faces are currently paired by detector order rather than by a persistent
-track identifier.
+H.264 frames are stamped at an even 15 frames a second. A camera that delivers fewer than 15
+frames a second fires the geometry clock less often, and the encoder, budgeting per frame,
+then spends proportionally less than 52 kbit/s; the pane's measured rate shows it.
 
-The autoencoder lives entirely on the analysis thread, so it needs no locking: the same
-thread that trains it is the one that runs it.
+## Quality evaluation
 
-The View menu can reset the autoencoder weights, which makes convergence easy to demonstrate.
-Only the learned side restarts: the neural wire begins again with a keyframe, because its
-decoder holds codes made by the old weights, while the traditional wire carries on and is not
-charged its startup keyframe a second time.
-It also separates *Face landmarking*, which decides whether the landmarker runs at all, from
-*Landmark overlay*, which decides only whether the received geometry is drawn over panels 2
-and 3. Landmarking is primarily a bit-allocation and training signal, not a picture element,
-so hiding the overlay leaves prioritisation, training and the geometry bitrate untouched and
-shows the reconstructions as a viewer would actually receive them. Turning landmarking itself
-off is the ablation: no landmark weighting, no geometry stream.
+Both received pictures are compared with the source luma, at the capture size, before the
+overlay is drawn. Each pane reports ordinary PSNR and importance-weighted PSNR, which uses the
+same map as low-ban so an error around an eye or mouth counts more than the same error in the
+background.
 
-### Quality evaluation
+Neither says whether expression survived, so each pane also reports *landmark error*: the
+landmark model is run on the received picture from the same box the source was landmarked
+with, and the normalised mean error is the average distance between the two sets of points as
+a percentage of the source's outer-eye-corner distance. The mouth's 20 points are also scored
+alone in `evaluate`, since speech and expression move them most. Payload, quality and landmark
+error must be read together; a higher PSNR at a much higher payload is not automatically
+better.
 
-Both reconstructions are compared with source luma before landmark lines are drawn. Each pane
-reports ordinary PSNR and importance-weighted PSNR. The weighted version uses the same map as
-the codecs, so an error around an eye or mouth counts more than the same error in the
-background. Payload and quality must be read together as a rate-distortion result; a higher
-PSNR at a much higher payload is not automatically better.
+`dd.ps1 evaluate` has two parts.
 
-`dd.ps1 evaluate` loads every `samples/*.png` through Windows Imaging Component, resizes it to
-640x480, detects and landmarks faces, trains the autoencoder for 50 deterministic passes over
-the set, then serializes and decodes independent complete keyframes for both approaches. It
-prints per-image and mean CSV rows plus both configured 5 Hz temporal rates. On the current
-nine samples, traditional averages a 322.4 kbit complete keyframe at 36.84 dB PSNR and neural
-averages 27.4 kbit at 25.89 dB. The configured two-face references are 54.4 kbit/s traditional
-and 71.1 kbit/s neural, assuming each landmark delta fits within 80 bytes. This is a
-reproducible still-image check of reconstruction and prioritisation. It says nothing about
-motion compensation, which only exists between frames, and nothing about generalisation to
-people outside the training set.
+- **Stills.** Every `samples/*.png` is resized to 640x480, detected and landmarked, and coded
+  as low-ban's startup: the geometry keyframe and one complete picture keyframe. H.264 then
+  codes the same picture at the finest fixed quantiser whose single frame fits the same total
+  byte count, with and without the face offset. On the current nine samples, low-ban's
+  startup averages 95.6 kbit at 32.94 dB, 32.75 dB face-weighted and 1.80% landmark error;
+  H.264 at 90.3 kbit reaches 36.03 dB, 35.56 dB and 1.45%, and with the face offset, at 90.7
+  kbit, 36.00 dB, 35.60 dB and 1.30%. H.264 lands under the budget because whole quantiser
+  steps are coarse; one finer step would overshoot it.
+- **Clips.** Every `samples/*.mp4` is replayed through two call sessions that differ only in
+  whether H.264 gets the face offset. Each clip reports low-ban's startup size, steady picture
+  and geometry rates, link estimate, quality, landmark and mouth error and the number of warped
+  packets, and the same for both H.264 variants. Rates after startup exclude the startup
+  pictures, which are reported on their own. This is the only measurement of motion, warp and
+  scheduling; it needs a clip recorded with File > Record clip.
 
 ## Face detection
 
@@ -385,22 +489,19 @@ the coarse detector above does not reproduce them exactly.
 
 `box_from_parts` closes that gap. The box-to-image mapping is `image = origin + span * model`
 per axis, so given a predicted shape a least squares fit recovers the box the model itself
-implies. The engine feeds that refined box back on the next frame whenever it overlaps a
+implies. The tracker feeds that refined box back on the next frame whenever it overlaps a
 fresh detection, so after one frame the detector's calibration constants stop mattering and
 the boxes track the model's own convention.
 
 ## Bitrate figures
 
-The left pane is a reference figure for the raw feed at 24 bits per pixel under a conventional
-codec at an assumed 5% of raw. Both low-bandwidth panes report rolling rates from serialized
-image and landmark bytes actually emitted by independent 5 Hz wire clocks. Traditional uses
-a ten-second window, which includes and then ages out its one-time complete startup keyframe;
-neural uses a three-second window matching its full-latent keyframe interval.
-
-The full-resolution headless checks enforce a 51.2 kbit/s traditional ceiling for one face
-and measure 65.9 kbit/s for a changing neural sequence. This is serialized codec payload, not
-a network measurement. Transport headers, audio, retransmission and error correction are
-excluded.
+After startup, low-ban is capped at 1,200-byte picture packets at 5 Hz, 48 kbit/s, plus 15 Hz
+geometry. With each face's delta within 80 bytes, that is a 57.6 kbit/s ceiling for one face
+and 67.2 kbit/s for two; geometry escapes for large motion are not hard-capped, and a still or
+rigidly moving face costs far less than 80 bytes. H.264 runs at a constant 52 kbit/s. The
+headless checks enforce the one-face ceiling below 80 kbit/s and every picture packet after
+startup inside its cap. All of this is serialized payload; the link estimate above adds
+headers and audio.
 
 ## Building and running
 
@@ -414,19 +515,19 @@ vendored dd driver, and the `evaluate` project command is declared in `dd.psd1`.
 ```
 
 `dd.ps1 test --label low-ban` builds both configurations and runs the headless checks that do
-not need a camera or a window. They cover image operations, YUY2 decoding including bottom-up
-buffers, drawing and clipping, the low bandwidth codecs, face detection, the embedded
-manifest and the landmark model reader. Between them they cover transform ROI quality,
-autoencoder convergence, exact
-traditional and neural keyframe reconstruction, bounded sparse deltas,
-latent/transform/landmark corruption handling, complete 4,800-block traditional startup,
-unchanged-payload suppression, and full-resolution streams held under their configured rate
-references.
+not need a camera or a window. They cover image operations, YUY2 and NV12 conversion including
+bottom-up and padded buffers, drawing and clipping, the transform codec and its wire, the
+Delaunay triangulation and the warp, the landmark wire and filter, landmark error, the H.264
+wire and its face offset, clip recording and replay, the call session's clocks and caps, face
+detection, the embedded manifest and the landmark model reader. Checks that need Media
+Foundation's H.264 encoder - the H.264 wire, clip recording and the session's H.264 receiver -
+are skipped, not failed, where Windows does not have it or where the probe above finds it
+crashes. On GitHub's Windows Server runner they are skipped, so CI does not exercise H.264.
 
 `/test` and `/evaluate` write to standard output when it is redirected, so CTest's log and the
 `evaluate` result carry their text; run from a console, they attach to it instead.
 
-Three checks are worth calling out, because they catch the failures that are otherwise silent:
+Four checks are worth calling out, because they catch the failures that are otherwise silent:
 
 - A face that keeps changing at a new position must not permanently outbid the blocks it
   vacated. The check moves a volatile textured square across a static background under the
@@ -437,6 +538,10 @@ Three checks are worth calling out, because they catch the failures that are oth
   capped wire; with the motion predictor disabled the same sequence manages 26.9 dB while
   spending more bytes. A third holds a scene still and requires the wire to fall silent, which
   is what catches rate-distortion trimming mistaking its own rounding for new work.
+- Geometry that moves over a still picture must be refused for no more than one header, with
+  the receiver showing the picture it holds; and a rejected warped packet must leave the
+  decoder exactly as a decoder that never saw it. Those are what keep a wrong landmark track
+  from silently corrupting the picture at either end.
 - The mean shape decoded from the landmark model has to actually look like a face, with the
   eyes above the nose above the mouth above the chin. That is hard to satisfy by accident if
   any part of the packed integer or float decoding is wrong.
@@ -447,7 +552,7 @@ Three checks are worth calling out, because they catch the failures that are oth
 
 The landmark model is not built by this repository. Without
 `exe/shape_predictor_68_face_landmarks.dat` the application still runs; it reports the
-missing model in the window and the landmark overlay is disabled.
+missing model in the window, and there is no landmarking, warp or landmark error.
 
 ## Known limitations
 
@@ -455,29 +560,24 @@ What follows is what the current design cannot do by construction. Work that wou
 these limits, and everything else worth doing next, is in [todo.md](todo.md).
 
 - Only the first camera is used and only 640x480 YUY2 is requested.
-- The autoencoder learns from whatever is currently in front of the camera. It is a small
-  online demonstration, not a competitive pretrained neural video codec.
-- The in-process encoder and decoder currently share the same changing model object. A real
-  remote decoder cannot reproduce online weight updates from latent packets alone. Deployment
-  requires a frozen pretrained model at both endpoints or an explicit, budgeted model-update
-  protocol; model bytes are not included in the displayed bitrate.
-- The transform encoder advances its reference frame assuming each packet is delivered. Every
-  packet `encode` returns must reach `decode`, or the two sides start predicting from
-  different pictures.
-- The motion predictor is computed in floating point at both ends. In this process that is
-  trivially identical, but two endpoints built with different compilers or optimisation
-  settings could disagree by a rounding step. A deployable version would have to specify the
-  predictor in integer arithmetic.
+- The transform encoder advances its reference frame and geometry assuming each packet is
+  delivered. Every packet `encode` returns must reach `decode`, or the two sides start
+  predicting from different pictures.
+- The warp is integer arithmetic, but the transform predictor it feeds - and the motion
+  predictor - is a floating point DCT at both ends. In this process that is trivially
+  identical; two endpoints built with different compilers could disagree by a rounding step.
+- The warp mesh covers the face from chin to forehead. Hair, ears, neck, shoulders and hands
+  are moved only by block motion compensation, and gestures get the background's weight.
+- The warp is committed or refused for a whole packet, not per face or per triangle.
 - Motion vectors are whole-pixel against a single reference frame, and there is no in-loop
-  deblocking. The full startup keyframe is substantially larger than one steady-state packet
-  and would take time to deliver over a real 2G link.
-- Both codecs are luma only. A real call would want at least coarse chroma, which neither
-  panel currently spends a byte on.
-- Packets are serialized and decoded in memory but are not sent through a socket. Both
-  displayed wire figures therefore exclude IP/transport framing, loss recovery, jitter and
-  congestion.
+  deblocking. The records are byte aligned rather than entropy coded.
+- Both codecs code luma only.
+- H.264 takes a single region of interest per frame, so several faces share their union.
+- Packets are serialized and decoded in memory but are not sent through a socket. The link
+  estimate adds headers and audio by accounting, not by measurement.
 - Multiple faces are paired by detector order. If their order swaps, the next landmark delta
   can be larger until the following keyframe.
+- No clip is committed, so motion results depend on whoever records one.
 - The self test cannot prove the detector finds real faces. It checks the weight table is
   wired up, that the forward pass is numerically healthy and deterministic, and that it does
   not fire on synthetic input, but there is no reference face image in the repository.

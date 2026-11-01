@@ -1,14 +1,18 @@
 #include "capture.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 
 #include <windows.h>
+#include <codecapi.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <wrl/client.h>
+
+#include "baseline.h"
 
 #pragma comment(lib, "Mf.lib")
 #pragma comment(lib, "Mfplat.lib")
@@ -244,4 +248,282 @@ bool webcam::read(video_frame& frame, std::string& error)
 	buffer->Unlock();
 
 	return decoded;
+}
+
+namespace
+{
+	// High enough that a clip is a faithful source for both wires: about 0.9 bits per pixel at
+	// 640x480 and 15 frames a second.
+	constexpr UINT32 clip_bits_per_second = 4000000;
+
+	std::string clip_failure(const char* what, const HRESULT hr)
+	{
+		char text[192] = {};
+		snprintf(text, sizeof(text), "%s (0x%08lX)", what, static_cast<unsigned long>(hr));
+		return text;
+	}
+
+	HRESULT describe_video(IMFMediaType* type, const GUID& subtype, const int width, const int height,
+		const int frames_per_second)
+	{
+		HRESULT hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+		if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, subtype);
+		if (SUCCEEDED(hr)) hr = MFSetAttributeSize(type, MF_MT_FRAME_SIZE, width, height);
+		if (SUCCEEDED(hr) && frames_per_second > 0)
+			hr = MFSetAttributeRatio(type, MF_MT_FRAME_RATE, frames_per_second, 1);
+		if (SUCCEEDED(hr)) hr = MFSetAttributeRatio(type, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+		if (SUCCEEDED(hr)) hr = type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+		return hr;
+	}
+}
+
+struct clip_writer::impl
+{
+	ComPtr<IMFSinkWriter> writer;
+	DWORD stream = 0;
+	int width = 0;
+	int height = 0;
+	LONGLONG duration = 0;
+	int frames = 0;
+	std::vector<uint8_t> packed;
+};
+
+clip_writer::~clip_writer()
+{
+	std::string ignored;
+	close(ignored);
+}
+
+bool clip_writer::is_open() const
+{
+	return state != nullptr;
+}
+
+int clip_writer::frames() const
+{
+	return state != nullptr ? state->frames : 0;
+}
+
+bool clip_writer::open(const std::wstring& path, const int width, const int height, const int frames_per_second,
+	std::string& error)
+{
+	std::string ignored;
+	close(ignored);
+	if (width <= 0 || height <= 0 || width % 2 != 0 || frames_per_second <= 0)
+	{
+		error = "a clip needs an even frame width and a frame rate";
+		return false;
+	}
+
+	// The sink writer drives the same H.264 encoder the baseline uses.
+	if (!h264_safe_to_use(error)) return false;
+
+	auto owned = std::make_unique<impl>();
+	owned->width = width;
+	owned->height = height;
+	owned->duration = 10000000LL / frames_per_second;
+
+	HRESULT hr = MFCreateSinkWriterFromURL(path.c_str(), nullptr, nullptr, &owned->writer);
+	if (FAILED(hr))
+	{
+		error = clip_failure("could not create the clip file", hr);
+		return false;
+	}
+
+	ComPtr<IMFMediaType> output;
+	hr = MFCreateMediaType(&output);
+	if (SUCCEEDED(hr)) hr = describe_video(output.Get(), MFVideoFormat_H264, width, height, frames_per_second);
+	if (SUCCEEDED(hr)) hr = output->SetUINT32(MF_MT_AVG_BITRATE, clip_bits_per_second);
+	if (SUCCEEDED(hr)) hr = output->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High);
+	if (SUCCEEDED(hr)) hr = owned->writer->AddStream(output.Get(), &owned->stream);
+
+	ComPtr<IMFMediaType> input;
+	if (SUCCEEDED(hr)) hr = MFCreateMediaType(&input);
+	if (SUCCEEDED(hr)) hr = describe_video(input.Get(), MFVideoFormat_YUY2, width, height, frames_per_second);
+	if (SUCCEEDED(hr)) hr = owned->writer->SetInputMediaType(owned->stream, input.Get(), nullptr);
+	if (SUCCEEDED(hr)) hr = owned->writer->BeginWriting();
+	if (FAILED(hr))
+	{
+		error = clip_failure("could not start an H.264 clip", hr);
+		return false;
+	}
+
+	state = owned.release();
+	return true;
+}
+
+bool clip_writer::write(const video_frame& frame, std::string& error)
+{
+	if (state == nullptr)
+	{
+		error = "no clip is open";
+		return false;
+	}
+	if (frame.width() != state->width || frame.height() != state->height)
+	{
+		error = "the frame size changed while recording";
+		return false;
+	}
+
+	encode_yuy2(frame, state->packed);
+	const auto length = static_cast<DWORD>(state->packed.size());
+	ComPtr<IMFMediaBuffer> buffer;
+	HRESULT hr = MFCreateMemoryBuffer(length, &buffer);
+	BYTE* data = nullptr;
+	if (SUCCEEDED(hr)) hr = buffer->Lock(&data, nullptr, nullptr);
+	if (SUCCEEDED(hr))
+	{
+		memcpy(data, state->packed.data(), length);
+		buffer->Unlock();
+		hr = buffer->SetCurrentLength(length);
+	}
+
+	ComPtr<IMFSample> sample;
+	if (SUCCEEDED(hr)) hr = MFCreateSample(&sample);
+	if (SUCCEEDED(hr)) hr = sample->AddBuffer(buffer.Get());
+	if (SUCCEEDED(hr)) hr = sample->SetSampleTime(state->frames * state->duration);
+	if (SUCCEEDED(hr)) hr = sample->SetSampleDuration(state->duration);
+	if (SUCCEEDED(hr)) hr = state->writer->WriteSample(state->stream, sample.Get());
+	if (FAILED(hr))
+	{
+		error = clip_failure("could not write a clip frame", hr);
+		return false;
+	}
+	++state->frames;
+	return true;
+}
+
+bool clip_writer::close(std::string& error)
+{
+	if (state == nullptr) return true;
+	const HRESULT hr = state->frames > 0 ? state->writer->Finalize() : S_OK;
+	delete state;
+	state = nullptr;
+	if (FAILED(hr))
+	{
+		error = clip_failure("could not finish the clip", hr);
+		return false;
+	}
+	return true;
+}
+
+struct clip_reader::impl
+{
+	ComPtr<IMFSourceReader> reader;
+	GUID subtype = GUID_NULL;
+	UINT32 width = 0;
+	UINT32 height = 0;
+	LONG stride = 0;
+};
+
+clip_reader::~clip_reader()
+{
+	close();
+}
+
+void clip_reader::close()
+{
+	delete state;
+	state = nullptr;
+}
+
+bool clip_reader::open(const std::wstring& path, const int width, const int height, std::string& error)
+{
+	close();
+	auto owned = std::make_unique<impl>();
+
+	// The advanced processor converts whatever the clip holds to the wanted size and format.
+	ComPtr<IMFAttributes> attributes;
+	HRESULT hr = MFCreateAttributes(&attributes, 1);
+	if (SUCCEEDED(hr)) hr = attributes->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
+	if (SUCCEEDED(hr)) hr = MFCreateSourceReaderFromURL(path.c_str(), attributes.Get(), &owned->reader);
+	if (FAILED(hr))
+	{
+		error = clip_failure("could not open the clip", hr);
+		return false;
+	}
+	owned->reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
+	owned->reader->SetStreamSelection(first_video_stream, TRUE);
+
+	bool chosen = false;
+	for (const GUID& subtype : {MFVideoFormat_YUY2, MFVideoFormat_NV12})
+	{
+		ComPtr<IMFMediaType> type;
+		if (FAILED(MFCreateMediaType(&type)) || FAILED(describe_video(type.Get(), subtype, width, height, 0))) continue;
+		if (SUCCEEDED(owned->reader->SetCurrentMediaType(first_video_stream, nullptr, type.Get())))
+		{
+			chosen = true;
+			break;
+		}
+	}
+
+	ComPtr<IMFMediaType> current;
+	if (!chosen || FAILED(owned->reader->GetCurrentMediaType(first_video_stream, &current))
+		|| FAILED(current->GetGUID(MF_MT_SUBTYPE, &owned->subtype))
+		|| FAILED(MFGetAttributeSize(current.Get(), MF_MT_FRAME_SIZE, &owned->width, &owned->height))
+		|| owned->width != static_cast<UINT32>(width) || owned->height != static_cast<UINT32>(height))
+	{
+		error = "the clip cannot be converted to the capture format";
+		return false;
+	}
+
+	UINT32 stride = 0;
+	owned->stride = SUCCEEDED(current->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride))
+		? static_cast<LONG>(static_cast<INT32>(stride))
+		: static_cast<LONG>(owned->subtype == MFVideoFormat_YUY2 ? width * 2 : width);
+
+	state = owned.release();
+	return true;
+}
+
+bool clip_reader::read(video_frame& frame, double& seconds, std::string& error)
+{
+	if (state == nullptr)
+	{
+		error = "no clip is open";
+		return false;
+	}
+
+	for (;;)
+	{
+		DWORD stream_index = 0;
+		DWORD flags = 0;
+		LONGLONG timestamp = 0;
+		ComPtr<IMFSample> sample;
+		const HRESULT hr = state->reader->ReadSample(first_video_stream, 0, &stream_index, &flags, &timestamp, &sample);
+		if (FAILED(hr))
+		{
+			error = clip_failure("could not read the clip", hr);
+			return false;
+		}
+		if (flags & MF_SOURCE_READERF_ERROR)
+		{
+			error = "the clip reported a stream error";
+			return false;
+		}
+		if (flags & MF_SOURCE_READERF_ENDOFSTREAM) return false;
+		if (!sample) continue;
+
+		ComPtr<IMFMediaBuffer> buffer;
+		BYTE* bytes = nullptr;
+		DWORD length = 0;
+		if (FAILED(sample->ConvertToContiguousBuffer(&buffer)) || FAILED(buffer->Lock(&bytes, nullptr, &length)))
+		{
+			error = "a clip frame could not be read";
+			return false;
+		}
+		const int width = static_cast<int>(state->width);
+		const int height = static_cast<int>(state->height);
+		const bool decoded = state->subtype == MFVideoFormat_YUY2
+			? decode_yuy2(frame, bytes, length, width, height, state->stride)
+			: decode_nv12(frame, bytes, length, width, height, std::abs(state->stride), height);
+		buffer->Unlock();
+		if (!decoded)
+		{
+			error = "a clip frame was not in the expected layout";
+			return false;
+		}
+		seconds = static_cast<double>(timestamp) / 10000000.0;
+		return true;
+	}
 }

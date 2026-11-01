@@ -494,6 +494,74 @@ namespace
 					return false;
 		return true;
 	}
+
+	// One face of a delta packet: a layout byte (bit 0 sparse, bit 1 shifted), the shift if
+	// any, the mask of listed points if sparse, the escape byte count, then one byte per listed
+	// point holding its x and y residual from the shift as nibbles, -7..7, with 15 escaping to
+	// a variable-length value after the nibbles. Unlisted points move by the shift alone.
+	std::vector<uint8_t> face_delta(const std::vector<point_i>& previous, const std::vector<point_i>& next,
+		const point_i shift, const bool sparse)
+	{
+		std::vector<uint8_t> bytes;
+		const bool shifted = shift.x != 0 || shift.y != 0;
+		bytes.push_back(static_cast<uint8_t>((sparse ? 1 : 0) | (shifted ? 2 : 0)));
+		if (shifted)
+		{
+			wire_append_varuint(bytes, wire_zigzag_encode(shift.x));
+			wire_append_varuint(bytes, wire_zigzag_encode(shift.y));
+		}
+
+		std::vector<uint8_t> mask(sparse ? (next.size() + 7) / 8 : 0, 0);
+		std::vector<uint8_t> packed;
+		std::vector<uint8_t> escapes;
+		for (size_t i = 0; i < next.size(); ++i)
+		{
+			const int residual[2] = {next[i].x - previous[i].x - shift.x, next[i].y - previous[i].y - shift.y};
+			if (sparse)
+			{
+				if (residual[0] == 0 && residual[1] == 0) continue;
+				mask[i / 8] = static_cast<uint8_t>(mask[i / 8] | 1 << (i % 8));
+			}
+			uint8_t nibbles[2] = {};
+			for (int axis = 0; axis < 2; ++axis)
+			{
+				if (residual[axis] >= -7 && residual[axis] <= 7) nibbles[axis] = static_cast<uint8_t>(residual[axis] + 7);
+				else
+				{
+					nibbles[axis] = 15;
+					wire_append_varuint(escapes, wire_zigzag_encode(residual[axis]));
+				}
+			}
+			packed.push_back(static_cast<uint8_t>(nibbles[0] | nibbles[1] << 4));
+		}
+		bytes.insert(bytes.end(), mask.begin(), mask.end());
+		wire_append_varuint(bytes, static_cast<uint32_t>(escapes.size()));
+		bytes.insert(bytes.end(), packed.begin(), packed.end());
+		bytes.insert(bytes.end(), escapes.begin(), escapes.end());
+		return bytes;
+	}
+
+	int median(std::vector<int> values)
+	{
+		if (values.empty()) return 0;
+		std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+		return values[values.size() / 2];
+	}
+
+	// Decoded coordinates beyond this are corrupt, whatever the packet claims.
+	constexpr int coordinate_bound = 1 << 20;
+
+	// One euro filter: cut-offs in hertz, and the speed term in hertz per pixel per second. A
+	// still landmark is held to 1.5 Hz; one moving at 200 pixels a second is followed at 7.5 Hz.
+	constexpr double filter_min_cutoff = 1.5;
+	constexpr double filter_speed_gain = 0.03;
+	constexpr double filter_speed_cutoff = 1.0;
+
+	double smoothing(const double cutoff, const double seconds)
+	{
+		const double time_constant = 1.0 / (2.0 * 3.14159265358979323846 * cutoff);
+		return 1.0 / (1.0 + time_constant / seconds);
+	}
 }
 
 void temporal_landmark_stream::reset()
@@ -502,14 +570,25 @@ void temporal_landmark_stream::reset()
 	decoder_points.clear();
 }
 
-landmark_packet temporal_landmark_stream::encode(const std::vector<std::vector<point_i>>& faces,
-	                                             bool force_keyframe)
+face_geometry temporal_landmark_stream::transmitted() const
+{
+	face_geometry faces = encoder_points;
+	for (auto& face : faces)
+		for (auto& point : face)
+		{
+			point.x *= 2;
+			point.y *= 2;
+		}
+	return faces;
+}
+
+landmark_packet temporal_landmark_stream::encode(const face_geometry& faces, bool force_keyframe)
 {
 	landmark_packet packet;
 	const auto quantized = quantize_points(faces);
 	force_keyframe = force_keyframe || !same_shape(quantized, encoder_points);
 	if (!force_keyframe && same_points(quantized, encoder_points)) return packet;
-	packet.bytes = {'L', 'M', 1, static_cast<uint8_t>(force_keyframe ? 1 : 0),
+	packet.bytes = {'L', 'M', 2, static_cast<uint8_t>(force_keyframe ? 1 : 0),
 		static_cast<uint8_t>(std::min<size_t>(quantized.size(), 255))};
 	packet.keyframe = force_keyframe;
 
@@ -530,47 +609,41 @@ landmark_packet temporal_landmark_stream::encode(const std::vector<std::vector<p
 
 	for (size_t face_index = 0; face_index < quantized.size(); ++face_index)
 	{
-		const auto& face = quantized[face_index];
-		std::vector<uint8_t> nibbles;
-		std::vector<uint8_t> escapes;
-		nibbles.reserve(face.size() * 2);
-		for (size_t point_index = 0; point_index < face.size(); ++point_index)
+		const auto& previous = encoder_points[face_index];
+		const auto& next = quantized[face_index];
+		std::vector<int> moved_x;
+		std::vector<int> moved_y;
+		for (size_t i = 0; i < next.size(); ++i)
 		{
-			const int deltas[2] = {face[point_index].x - encoder_points[face_index][point_index].x,
-				face[point_index].y - encoder_points[face_index][point_index].y};
-			for (const int delta : deltas)
-			{
-				if (delta >= -7 && delta <= 7) nibbles.push_back(static_cast<uint8_t>(delta + 7));
-				else
-				{
-					nibbles.push_back(15);
-					wire_append_varuint(escapes, wire_zigzag_encode(delta));
-				}
-			}
+			moved_x.push_back(next[i].x - previous[i].x);
+			moved_y.push_back(next[i].y - previous[i].y);
 		}
 
-		packet.bytes.push_back(static_cast<uint8_t>(face.size()));
-		wire_append_u16(packet.bytes, escapes.size());
-		for (size_t i = 0; i < nibbles.size(); i += 2)
-		{
-			const uint8_t high = i + 1 < nibbles.size() ? nibbles[i + 1] : 0;
-			packet.bytes.push_back(static_cast<uint8_t>(nibbles[i] | high << 4));
-		}
-		packet.bytes.insert(packet.bytes.end(), escapes.begin(), escapes.end());
+		// Every layout decodes the same way, so the shortest one wins. The median shift is
+		// what the whole head did; the residuals are what the expression did.
+		const point_i shift{median(moved_x), median(moved_y)};
+		std::vector<uint8_t> best;
+		for (const bool sparse : {false, true})
+			for (const point_i candidate : {point_i{0, 0}, shift})
+			{
+				std::vector<uint8_t> trial = face_delta(previous, next, candidate, sparse);
+				if (best.empty() || trial.size() < best.size()) best = std::move(trial);
+			}
+		packet.bytes.push_back(static_cast<uint8_t>(next.size()));
+		packet.bytes.insert(packet.bytes.end(), best.begin(), best.end());
 	}
 	encoder_points = quantized;
 	return packet;
 }
 
-bool temporal_landmark_stream::decode(const landmark_packet& packet,
-	                                  std::vector<std::vector<point_i>>& faces)
+bool temporal_landmark_stream::decode(const landmark_packet& packet, face_geometry& faces)
 {
 	if (packet.bytes.size() < 5 || packet.bytes[0] != 'L' || packet.bytes[1] != 'M'
-		|| packet.bytes[2] != 1) return false;
+		|| packet.bytes[2] != 2 || (packet.bytes[3] & ~1u) != 0) return false;
 	const bool keyframe = (packet.bytes[3] & 1) != 0;
 	const size_t face_count = packet.bytes[4];
 	size_t offset = 5;
-	std::vector<std::vector<point_i>> next;
+	face_geometry next;
 
 	if (keyframe)
 	{
@@ -586,6 +659,7 @@ bool temporal_landmark_stream::decode(const landmark_packet& packet,
 				if (!wire_read_varuint(packet.bytes, offset, x) || !wire_read_varuint(packet.bytes, offset, y))
 					return false;
 				point = {wire_zigzag_decode(x), wire_zigzag_decode(y)};
+				if (std::abs(point.x) > coordinate_bound || std::abs(point.y) > coordinate_bound) return false;
 			}
 		}
 	}
@@ -593,38 +667,71 @@ bool temporal_landmark_stream::decode(const landmark_packet& packet,
 	{
 		if (decoder_points.size() != face_count) return false;
 		next = decoder_points;
-		for (size_t face_index = 0; face_index < face_count; ++face_index)
+		for (auto& face : next)
 		{
-			if (offset >= packet.bytes.size()) return false;
+			if (offset + 2 > packet.bytes.size()) return false;
 			const size_t point_count = packet.bytes[offset++];
-			size_t escape_size = 0;
-			if (point_count != next[face_index].size() || !wire_read_u16(packet.bytes, offset, escape_size))
-				return false;
-			const size_t packed_size = (point_count * 2 + 1) / 2;
+			const uint8_t layout = packet.bytes[offset++];
+			if (point_count != face.size() || (layout & ~3u) != 0) return false;
+
+			point_i shift{0, 0};
+			if ((layout & 2) != 0)
+			{
+				uint32_t shift_x = 0;
+				uint32_t shift_y = 0;
+				if (!wire_read_varuint(packet.bytes, offset, shift_x) || !wire_read_varuint(packet.bytes, offset, shift_y))
+					return false;
+				shift = {wire_zigzag_decode(shift_x), wire_zigzag_decode(shift_y)};
+			}
+
+			std::vector<bool> listed(point_count, true);
+			if ((layout & 1) != 0)
+			{
+				const size_t mask_size = (point_count + 7) / 8;
+				if (offset + mask_size > packet.bytes.size()) return false;
+				for (size_t bit = 0; bit < mask_size * 8; ++bit)
+				{
+					const bool set = (packet.bytes[offset + bit / 8] >> (bit % 8) & 1) != 0;
+					if (bit < point_count) listed[bit] = set;
+					else if (set) return false;
+				}
+				offset += mask_size;
+			}
+
+			uint32_t escape_size = 0;
+			if (!wire_read_varuint(packet.bytes, offset, escape_size)) return false;
+			const size_t packed_size = static_cast<size_t>(std::count(listed.begin(), listed.end(), true));
 			if (offset + packed_size + escape_size > packet.bytes.size()) return false;
-			const size_t packed_offset = offset;
+			size_t packed_offset = offset;
 			size_t escape_offset = offset + packed_size;
 			const size_t escape_end = escape_offset + escape_size;
-			offset = escape_end;
 
-			for (size_t coordinate = 0; coordinate < point_count * 2; ++coordinate)
+			for (size_t i = 0; i < point_count; ++i)
 			{
-				const uint8_t packed = packet.bytes[packed_offset + coordinate / 2];
-				const uint8_t nibble = coordinate % 2 == 0 ? packed & 0x0f : packed >> 4;
-				int delta = 0;
-				if (nibble < 15) delta = static_cast<int>(nibble) - 7;
-				else
+				int residual[2] = {};
+				if (listed[i])
 				{
-					uint32_t escaped = 0;
-					if (!wire_read_varuint(packet.bytes, escape_offset, escaped) || escape_offset > escape_end)
-						return false;
-					delta = wire_zigzag_decode(escaped);
+					const uint8_t packed = packet.bytes[packed_offset++];
+					for (int axis = 0; axis < 2; ++axis)
+					{
+						const uint8_t nibble = axis == 0 ? packed & 0x0f : packed >> 4;
+						if (nibble < 15) residual[axis] = static_cast<int>(nibble) - 7;
+						else
+						{
+							uint32_t escaped = 0;
+							if (!wire_read_varuint(packet.bytes, escape_offset, escaped) || escape_offset > escape_end)
+								return false;
+							residual[axis] = wire_zigzag_decode(escaped);
+						}
+					}
 				}
-				point_i& point = next[face_index][coordinate / 2];
-				if (coordinate % 2 == 0) point.x += delta;
-				else point.y += delta;
+				const int64_t x = static_cast<int64_t>(face[i].x) + shift.x + residual[0];
+				const int64_t y = static_cast<int64_t>(face[i].y) + shift.y + residual[1];
+				if (std::abs(x) > coordinate_bound || std::abs(y) > coordinate_bound) return false;
+				face[i] = {static_cast<int>(x), static_cast<int>(y)};
 			}
 			if (escape_offset != escape_end) return false;
+			offset = escape_end;
 		}
 	}
 	if (offset != packet.bytes.size()) return false;
@@ -637,5 +744,78 @@ bool temporal_landmark_stream::decode(const landmark_packet& packet,
 			point.x *= 2;
 			point.y *= 2;
 		}
+	return true;
+}
+
+void landmark_filter::reset()
+{
+	state.clear();
+	previous_seconds = 0.0;
+}
+
+face_geometry landmark_filter::apply(const face_geometry& faces, const double seconds)
+{
+	bool fresh = state.size() != faces.size();
+	for (size_t face = 0; !fresh && face < faces.size(); ++face)
+		fresh = state[face].size() != faces[face].size() * 2;
+
+	face_geometry smoothed = faces;
+	const double elapsed = seconds - previous_seconds;
+
+	// Faces are paired by index, so a change in count, or a long gap, starts over from the
+	// raw landmarks rather than dragging one face's history onto another.
+	if (fresh || elapsed > 1.0 || elapsed < 0.0)
+	{
+		state.assign(faces.size(), {});
+		for (size_t face = 0; face < faces.size(); ++face)
+			for (const point_i point : faces[face])
+			{
+				state[face].push_back({static_cast<double>(point.x), 0.0});
+				state[face].push_back({static_cast<double>(point.y), 0.0});
+			}
+		previous_seconds = seconds;
+		return smoothed;
+	}
+
+	for (size_t face = 0; face < faces.size(); ++face)
+		for (size_t point = 0; point < faces[face].size(); ++point)
+			for (int axis_index = 0; axis_index < 2; ++axis_index)
+			{
+				axis& filtered = state[face][point * 2 + axis_index];
+				if (elapsed > 0.0)
+				{
+					const double raw = axis_index == 0 ? faces[face][point].x : faces[face][point].y;
+					const double speed = (raw - filtered.value) / elapsed;
+					filtered.speed += smoothing(filter_speed_cutoff, elapsed) * (speed - filtered.speed);
+					const double cutoff = filter_min_cutoff + filter_speed_gain * std::abs(filtered.speed);
+					filtered.value += smoothing(cutoff, elapsed) * (raw - filtered.value);
+				}
+				int& out = axis_index == 0 ? smoothed[face][point].x : smoothed[face][point].y;
+				out = static_cast<int>(std::lround(filtered.value));
+			}
+	previous_seconds = seconds;
+	return smoothed;
+}
+
+bool compare_landmarks(const std::vector<point_i>& reference, const std::vector<point_i>& measured,
+	landmark_error& error)
+{
+	error = {};
+	if (reference.size() != 68 || measured.size() != 68) return false;
+	const double ocular = std::hypot(static_cast<double>(reference[45].x - reference[36].x),
+		static_cast<double>(reference[45].y - reference[36].y));
+	if (ocular < 1.0) return false;
+
+	double overall = 0.0;
+	double mouth = 0.0;
+	for (size_t i = 0; i < reference.size(); ++i)
+	{
+		const double distance = std::hypot(static_cast<double>(measured[i].x - reference[i].x),
+			static_cast<double>(measured[i].y - reference[i].y));
+		overall += distance;
+		if (i >= 48) mouth += distance;
+	}
+	error.overall = overall / 68.0 / ocular;
+	error.mouth = mouth / 20.0 / ocular;
 	return true;
 }
