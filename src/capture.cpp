@@ -2,10 +2,13 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <memory>
+#include <thread>
 
 #include <windows.h>
 #include <codecapi.h>
+#include <objbase.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
@@ -110,6 +113,50 @@ namespace
 media_foundation::media_foundation()
 {
 	started = SUCCEEDED(MFStartup(MF_VERSION));
+}
+
+int run_on_mta(const std::function<int()>& callback)
+{
+	int result = 1;
+	std::exception_ptr callback_error;
+	std::thread worker([&]
+	{
+		struct com_scope
+		{
+			const HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
+			~com_scope()
+			{
+				if (SUCCEEDED(result)) CoUninitialize();
+			}
+		} apartment;
+
+		if (FAILED(apartment.result))
+		{
+			std::fprintf(stderr, "could not initialise the console MTA (0x%08lx)\n",
+			             static_cast<unsigned long>(apartment.result));
+			return;
+		}
+
+		try
+		{
+			result = callback();
+		}
+		catch (...)
+		{
+			callback_error = std::current_exception();
+		}
+	});
+	worker.join();
+	if (callback_error) std::rethrow_exception(callback_error);
+	return result;
+}
+
+bool is_mta_thread()
+{
+	APTTYPE type = APTTYPE_CURRENT;
+	APTTYPEQUALIFIER qualifier = APTTYPEQUALIFIER_NONE;
+	return SUCCEEDED(CoGetApartmentType(&type, &qualifier)) && type == APTTYPE_MTA;
 }
 
 media_foundation::~media_foundation()

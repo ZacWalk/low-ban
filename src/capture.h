@@ -3,9 +3,16 @@
 // hands us chroma for free, which the face detector uses.
 #pragma once
 
+#include <functional>
 #include <string>
 
 #include "image.h"
+
+// Runs backend-owned Media Foundation work on a fresh native MTA. The GUI
+// entry point is STA, so console modes use this boundary rather than trying
+// to change the apartment of the UI thread.
+int run_on_mta(const std::function<int()>& callback);
+bool is_mta_thread();
 
 // Process-wide Media Foundation lifetime. One instance must outlive every webcam.
 class media_foundation

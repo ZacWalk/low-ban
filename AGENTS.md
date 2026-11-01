@@ -16,7 +16,8 @@ you close it.
 
 ## Essentials
 
-- C++17, Win32, Media Foundation. Builds `Debug|x64` and `Release|x64` only.
+- C++20 at the libdesktop presentation boundary (the processing modules remain C++17-compatible),
+  Win32 and Media Foundation. Builds `Debug|x64` and `Release|x64` only.
 - No Windows AI APIs and no third-party codec libraries; the H.264 baseline uses the encoder
   and decoder that ship with Windows. The only external work is the face detector's network
   and weights, adapted from libfacedetection; keep its BSD notice intact in

@@ -12,25 +12,42 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "low-ban is 64-bit only; configure with an x64 toolchain.")
 endif()
 
-enable_language(RC)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-add_executable(low-ban WIN32
-    src/baseline.cpp
-    src/capture.cpp
-    src/codec.cpp
-    src/draw.cpp
-    src/engine.cpp
-    src/evaluate.cpp
-    src/face.cpp
-    src/face-model.cpp
-    src/image.cpp
-    src/landmarks.cpp
-    src/main.cpp
-    src/selftest.cpp
-    src/session.cpp
-    src/warp.cpp
-    src/res.rc
-    src/app.manifest
+# Develop against a sibling libdesktop checkout when one exists; a fresh clone
+# uses the first published revision that contains the neutral pf window layer.
+if(NOT DEFINED FETCHCONTENT_SOURCE_DIR_LIBDESKTOP
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../libdesktop/CMakeLists.txt")
+    set(FETCHCONTENT_SOURCE_DIR_LIBDESKTOP "${CMAKE_CURRENT_SOURCE_DIR}/../libdesktop"
+        CACHE PATH "Local libdesktop checkout to build against")
+endif()
+
+include(FetchContent)
+FetchContent_Declare(libdesktop
+    GIT_REPOSITORY https://github.com/ZacWalk/libdesktop.git
+    GIT_TAG        31aae322af6e0696a9597726705b1121bd31580b
+)
+FetchContent_MakeAvailable(libdesktop)
+
+platform_add_app(low-ban
+    SOURCES
+        src/baseline.cpp
+        src/capture.cpp
+        src/codec.cpp
+        src/draw.cpp
+        src/engine.cpp
+        src/evaluate.cpp
+        src/face.cpp
+        src/face-model.cpp
+        src/image.cpp
+        src/landmarks.cpp
+        src/main.cpp
+        src/selftest.cpp
+        src/session.cpp
+        src/warp.cpp
+    ICON        src/app.ico
+    DESCRIPTION "low-ban - low bandwidth video experiment"
+    OUTPUT_NAME low-ban-64
 )
 
 target_sources(low-ban PRIVATE
@@ -42,19 +59,17 @@ target_sources(low-ban PRIVATE
     src/face.h
     src/image.h
     src/landmarks.h
-    src/res.h
     src/session.h
     src/warp.h
 )
 
-target_compile_features(low-ban PRIVATE cxx_std_17)
+target_compile_features(low-ban PRIVATE cxx_std_20)
 target_include_directories(low-ban PRIVATE src)
 target_compile_definitions(low-ban PRIVATE WIN32 _WINDOWS NOMINMAX UNICODE _UNICODE)
 target_compile_options(low-ban PRIVATE /W3 /MP /permissive-)
 target_link_libraries(low-ban PRIVATE windowscodecs)
 
 set_target_properties(low-ban PROPERTIES
-    OUTPUT_NAME low-ban-64
     DEBUG_POSTFIX d
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/exe"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/exe"
