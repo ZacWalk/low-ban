@@ -113,6 +113,6 @@ path too: the received panes are 8-bit palette DIBs today, and H.264 is fed flat
 ## Application
 
 - Only the first camera is used, and only 640x480 YUY2 is requested.
-- The presentation now uses libdesktop-core for the frame, reactor, menu, keyboard, timer and
-  double-buffered draw context; the existing minimum client content size is enforced by the
-  platform's neutral client-size API.
+- The presentation uses libdesktop's `ui::app`, drawn menu bar, element tree and
+  `render::draw_context`; the existing minimum client content size is enforced by
+  `ui::frame_style::minimum_client`.

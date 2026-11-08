@@ -15,7 +15,7 @@ endif()
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # Develop against a sibling libdesktop checkout when one exists; a fresh clone
-# uses the first published revision that contains the neutral pf window layer.
+# uses the first published revision that contains the four-library UI layer.
 if(NOT DEFINED FETCHCONTENT_SOURCE_DIR_LIBDESKTOP
    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../libdesktop/CMakeLists.txt")
     set(FETCHCONTENT_SOURCE_DIR_LIBDESKTOP "${CMAKE_CURRENT_SOURCE_DIR}/../libdesktop"
@@ -25,11 +25,11 @@ endif()
 include(FetchContent)
 FetchContent_Declare(libdesktop
     GIT_REPOSITORY https://github.com/ZacWalk/libdesktop.git
-    GIT_TAG        31aae322af6e0696a9597726705b1121bd31580b
+    GIT_TAG        04109ee82a500db38d439fa281bbc3f43124adfe
 )
 FetchContent_MakeAvailable(libdesktop)
 
-platform_add_app(low-ban
+libdesktop_add_app(low-ban
     SOURCES
         src/baseline.cpp
         src/capture.cpp
@@ -67,7 +67,7 @@ target_compile_features(low-ban PRIVATE cxx_std_20)
 target_include_directories(low-ban PRIVATE src)
 target_compile_definitions(low-ban PRIVATE WIN32 _WINDOWS NOMINMAX UNICODE _UNICODE)
 target_compile_options(low-ban PRIVATE /W3 /MP /permissive-)
-target_link_libraries(low-ban PRIVATE windowscodecs)
+target_link_libraries(low-ban PRIVATE libdesktop::ui windowscodecs)
 
 set_target_properties(low-ban PROPERTIES
     DEBUG_POSTFIX d

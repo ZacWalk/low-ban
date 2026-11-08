@@ -5,7 +5,7 @@
 Low bandwidth video experiment: a face-prioritised transform codec whose receiver
 animates the face from transmitted landmarks, side by side with H.264 given the
 same bitrate and the same face boxes. The processing code remains C++17-compatible
-on Win32; the presentation uses libdesktop-core's `pf::` window and drawing layer.
+on Win32; the presentation uses libdesktop's `core`, `platform`, `render` and `ui` libraries.
 The camera and Media Foundation wires remain in their existing backends.
 
 During a hackathon at Microsoft I tried to invent a super low-bandwidth video codec optimised
@@ -31,7 +31,7 @@ Requires Windows x64 and Visual Studio with the Desktop C++ workload. The
 vendored [dd](https://github.com/ZacWalk/dd) runtime locates Visual Studio and
 uses the CMake and Ninja that ship with it.
 
-The GUI acquires the published libdesktop-core revision in `CMakeLists.txt`;
+The GUI acquires the published libdesktop revision in `CMakeLists.txt`;
 when a sibling `libdesktop` checkout exists, CMake uses it only as a local
 development override.
 

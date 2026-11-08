@@ -8,8 +8,9 @@ expression-bearing regions and the face's geometry travels separately from its p
 
 This file describes what the code does now. [todo.md](todo.md) lists what it does not.
 
-The application is C++20 at its presentation boundary and uses libdesktop-core's
-platform-independent `pf::` window, reactor, menu, keyboard, timer and drawing interfaces. The
+The application is C++20 at its presentation boundary and uses libdesktop's
+`core`, `platform`, `render` and `ui` libraries. The UI app owns a native-caption frame, a drawn
+menu bar and an element tree whose content element paints through `render::draw_context`. The
 H.264 baseline and clip recording still use the encoder, decoder and file
 transforms that ship with Windows' Media Foundation behind their existing implementations; there
 is no ONNX or DirectML runtime and no Windows AI API. The one piece not written here is the face
@@ -22,7 +23,7 @@ and legible, not to be robust in every lighting condition.
 
 ```
 src/
-  main.cpp        libdesktop `pf::` window, reactor, menu, painting. No image processing.
+  main.cpp        libdesktop `ui::app`, frame, menu element and render painting. No image processing.
   engine.h/.cpp   Threads, capture and clip recording, publishing results.
   session.h/.cpp  One simulated call: face tracking, both wires, clocks and metrics.
   capture.h/.cpp  Media Foundation webcam capture, clip recording and replay.
@@ -45,8 +46,8 @@ dd.ps1            build / run / test / evaluate / clean
 
 Dependency direction is strictly one way: `main` depends on `engine`, `engine` on `session`
 and `capture`, `session` on the processing modules, and the processing modules on `image`.
-`main` also depends on the published libdesktop-core platform layer; it does not name an `HWND`,
-GDI object or private Win32 facade. `image`, `draw` and `warp` have no Windows dependency at all,
+`main` depends on libdesktop's `ui` layer, with rendering through `render` and platform
+services through `platform`; it does not name an `HWND`, GDI object or private Win32 facade. `image`, `draw` and `warp` have no Windows dependency at all,
 which is what makes the self test possible without a camera or a window. `baseline` and `capture`
 hide Media Foundation behind Windows-free headers.
 
@@ -56,26 +57,25 @@ hide Media Foundation behind Windows-free headers.
 | -------- | -------------- |
 | capture  | Blocks on `IMFSourceReader::ReadSample`, decodes YUY2 into planes, publishes the frame, and writes it to a clip while recording. |
 | analysis | Detects faces, runs landmarks, runs the call session, publishes a `render_state`. Owns the H.264 transforms, so it initialises COM. |
-| UI       | libdesktop's `pf::window_frame` owns the native frame and message loop. A `pf` timer checks the generation counter and queues one invalidation; the shared double-buffered paint pass draws the three panes, captions, status and face boxes through one `draw_context`. |
+| UI       | The app's `ui::app` creates the frame with `ui::create_app_frame`, while `platform::run` drives the native window/message loop. Its 16 ms application frame tick checks the generation counter and queues one invalidation; the shared paint pass draws the three panes, captions, status and face boxes through one `render::draw_context`. |
 
 Handover is by `std::shared_ptr` to an immutable value, swapped under a short mutex. A
 consumer either sees the previous frame in full or the next frame in full, never a mixture,
-and neither producer ever blocks on the consumer. The UI thread only converts the already-published panes to platform bitmaps and draws them; it does
-no codec, camera, face or landmark processing, so a slow analysis pass degrades the frame rate
+and neither producer ever blocks on the consumer. The UI thread only converts the already-published panes to `core::surface` values and draws them; it
+does no codec, camera, face or landmark processing, so a slow analysis pass degrades the frame rate
 rather than freezing the window.
 
-The menu is built at runtime through `pf::menu_command`. Its checked callbacks read the four
+The drawn menu bar is built at runtime through `ui::command` objects. Its checked callbacks read the four
 application toggles, while libdesktop dispatches menu accelerators and keyboard messages without
-exposing native message parameters to the application. The reactor closes the frame on the
-platform close message, kills its refresh timer during destruction and keeps the existing minimum
-client content size through `window_frame::set_minimum_client_size`.
+exposing native message parameters to the application. The UI frame closes through the app lifecycle and keeps the existing minimum client content size
+through `ui::frame_style::minimum_client`.
 
 The analysis thread compares `shared_ptr` identity to skip frames it has already handled,
 which is also what keeps it from spinning when the camera stalls.
 
-The libdesktop entry point is STA, but `/test`, `/evaluate` and `/probe-h264` run their
+The `platform::run` UI thread is STA, but `/test`, `/evaluate` and `/probe-h264` run their
 Media Foundation and WIC work through the capture backend's fresh native MTA boundary. This
-keeps console-mode COM apartment behavior equal to the old entry point without putting COM
+keeps console-mode COM apartment behavior equal to the GUI path without putting COM
 initialisation in the GUI layer.
 
 ## Capture
@@ -542,7 +542,7 @@ crashes. On GitHub's Windows Server runner they are skipped, so CI does not exer
 The `/test` mode also runs deterministic GUI-boundary checks without creating a visible window:
 the minimum client size, the centred pane rectangles and the precedence and case handling of
 `/test`, `/evaluate` and `/probe-h264`. The GUI itself is headless for command modes because the
-libdesktop entry point returns before creating its native frame.
+the console path in `platform::run` returns before creating the native frame.
 
 `/test` and `/evaluate` write to standard output when it is redirected, so CTest's log and the
 `evaluate` result carry their text; run from a console, they attach to it instead.
