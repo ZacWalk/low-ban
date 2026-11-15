@@ -50,7 +50,7 @@ public:
 	// wire for this frame: every unit the decoder needs, including parameter sets the encoder
 	// kept out of band, and no access unit delimiters or SEI messages, which it does not.
 	bool encode(const image_u8& luma, const std::vector<rect_i>& faces, std::vector<uint8_t>& bytes,
-		std::string& error);
+	            std::string& error);
 
 	// Decodes the bytes `encode` produced. `picture` changes only when the decoder emits one.
 	bool decode(const std::vector<uint8_t>& bytes, image_u8& picture, std::string& error);

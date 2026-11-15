@@ -65,14 +65,16 @@ namespace
 		ComPtr<IWICBitmapScaler> scaler;
 		ComPtr<IWICFormatConverter> converter;
 		if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
-			WICDecodeMetadataCacheOnDemand, &decoder))) return false;
+		                                              WICDecodeMetadataCacheOnDemand, &decoder)))
+			return false;
 		if (FAILED(decoder->GetFrame(0, &source))) return false;
 		if (FAILED(factory->CreateBitmapScaler(&scaler))) return false;
 		if (FAILED(scaler->Initialize(source.Get(), frame_width, frame_height, WICBitmapInterpolationModeFant)))
 			return false;
 		if (FAILED(factory->CreateFormatConverter(&converter))) return false;
-		if (FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA,
-			WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) return false;
+		if (FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr,
+		                                 0.0, WICBitmapPaletteTypeCustom)))
+			return false;
 
 		std::vector<uint8_t> pixels(static_cast<size_t>(frame_width) * frame_height * 4);
 		if (FAILED(converter->CopyPixels(nullptr, frame_width * 4, static_cast<UINT>(pixels.size()), pixels.data())))
@@ -116,6 +118,7 @@ namespace
 	std::vector<rect_i> coded_boxes(const face_analysis& faces)
 	{
 		std::vector<rect_i> boxes;
+		boxes.reserve(faces.landmarked.size());
 		for (const rect_i& box : faces.landmarked) boxes.push_back(coded_box(box));
 		return boxes;
 	}
@@ -172,7 +175,7 @@ namespace
 	// Scores a picture decoded at the coded size: upscaled as the window shows it, then PSNR,
 	// face-weighted PSNR and the error of the landmarks found in it.
 	tally score_still(const image_u8& coded_picture, const video_frame& frame, const face_analysis& faces,
-		const image_u8& importance, const shape_predictor& predictor)
+	                  const image_u8& importance, const shape_predictor& predictor)
 	{
 		image_u8 shown(frame.width(), frame.height());
 		resize_bilinear(coded_picture, shown);
@@ -200,8 +203,8 @@ namespace
 
 	// The finest H.264 picture that fits `budget` bytes, by binary search over the fixed
 	// quantiser. When even the coarsest overshoots, that one is returned as it is.
-	bool h264_still(const image_u8& coded, const std::vector<rect_i>& faces, const int face_offset,
-		const size_t budget, std::vector<uint8_t>& best_bytes, image_u8& best_picture, std::string& error)
+	bool h264_still(const image_u8& coded, const std::vector<rect_i>& faces, const int face_offset, const size_t budget,
+	                std::vector<uint8_t>& best_bytes, image_u8& best_picture, std::string& error)
 	{
 		const auto encode = [&](const int quantizer, std::vector<uint8_t>& bytes, image_u8& picture)
 		{
@@ -212,8 +215,9 @@ namespace
 			settings.quantizer = quantizer;
 			settings.face_offset = face_offset;
 			h264_wire wire;
-			if (!wire.open(settings, error) || !wire.encode(coded, faces, bytes, error)
-				|| !wire.decode(bytes, picture, error)) return false;
+			if (!wire.open(settings, error) || !wire.encode(coded, faces, bytes, error) ||
+			    !wire.decode(bytes, picture, error))
+				return false;
 			if (picture.empty()) error = "the H.264 decoder returned no picture for a single frame";
 			return !picture.empty();
 		};
@@ -249,9 +253,9 @@ namespace
 		}
 
 		std::printf("still,faces,lowban_kbit,lowban_psnr,lowban_face_psnr,lowban_landmark_error_pct,"
-			"h264_kbit,h264_psnr,h264_face_psnr,h264_landmark_error_pct,"
-			"h264_face_offset_kbit,h264_face_offset_psnr,h264_face_offset_face_psnr,"
-			"h264_face_offset_landmark_error_pct\n");
+		            "h264_kbit,h264_psnr,h264_face_psnr,h264_landmark_error_pct,"
+		            "h264_face_offset_kbit,h264_face_offset_psnr,h264_face_offset_face_psnr,"
+		            "h264_face_offset_landmark_error_pct\n");
 
 		const transform_codec codec;
 		tally lowban_total;
@@ -285,11 +289,12 @@ namespace
 			const landmark_packet points = geometry.encode(faces.landmarks, true);
 			temporal_transform_stream wire;
 			const transform_packet packet = wire.encode(codec, coded, &coded_importance, true, 0,
-				scale_geometry(geometry.transmitted(), coded_scale));
+			                                            scale_geometry(geometry.transmitted(), coded_scale));
 			face_geometry received;
 			image_u8 lowban_picture;
-			if (!geometry.decode(points, received) || !wire.decode(codec, packet, coded.width(), coded.height(),
-				lowban_picture, scale_geometry(received, coded_scale)))
+			if (!geometry.decode(points, received) ||
+			    !wire.decode(codec, packet, coded.width(), coded.height(), lowban_picture,
+			                 scale_geometry(received, coded_scale)))
 			{
 				std::printf("could not decode the low-ban startup for %ls\n", name.c_str());
 				continue;
@@ -304,10 +309,10 @@ namespace
 			std::vector<uint8_t> offset_bytes;
 			image_u8 h264_picture;
 			image_u8 offset_picture;
-			if (h264_error.empty()
-				&& h264_still(coded, coded_boxes(faces), 0, lowban_bytes, h264_bytes, h264_picture, h264_error)
-				&& h264_still(coded, coded_boxes(faces), baseline_face_offset, lowban_bytes, offset_bytes,
-					offset_picture, h264_error))
+			if (h264_error.empty() &&
+			    h264_still(coded, coded_boxes(faces), 0, lowban_bytes, h264_bytes, h264_picture, h264_error) &&
+			    h264_still(coded, coded_boxes(faces), baseline_face_offset, lowban_bytes, offset_bytes, offset_picture,
+			               h264_error))
 			{
 				h264_scores = score_still(h264_picture, frame, faces, importance, predictor);
 				offset_scores = score_still(offset_picture, frame, faces, importance, predictor);
@@ -358,13 +363,13 @@ namespace
 		}
 
 		std::printf("clip,frames,seconds,"
-			"lowban_startup_kbit,lowban_picture_kbit_per_second,lowban_geometry_kbit_per_second,"
-			"lowban_link_kbit_per_second,lowban_psnr,lowban_face_psnr,lowban_landmark_error_pct,"
-			"lowban_mouth_error_pct,lowban_warped_packets,"
-			"h264_startup_kbit,h264_kbit_per_second,h264_link_kbit_per_second,h264_psnr,h264_face_psnr,"
-			"h264_landmark_error_pct,h264_mouth_error_pct,"
-			"h264_uniform_kbit_per_second,h264_uniform_psnr,h264_uniform_face_psnr,"
-			"h264_uniform_landmark_error_pct,h264_uniform_mouth_error_pct\n");
+		            "lowban_startup_kbit,lowban_picture_kbit_per_second,lowban_geometry_kbit_per_second,"
+		            "lowban_link_kbit_per_second,lowban_psnr,lowban_face_psnr,lowban_landmark_error_pct,"
+		            "lowban_mouth_error_pct,lowban_warped_packets,"
+		            "h264_startup_kbit,h264_kbit_per_second,h264_link_kbit_per_second,h264_psnr,h264_face_psnr,"
+		            "h264_landmark_error_pct,h264_mouth_error_pct,"
+		            "h264_uniform_kbit_per_second,h264_uniform_psnr,h264_uniform_face_psnr,"
+		            "h264_uniform_landmark_error_pct,h264_uniform_mouth_error_pct\n");
 
 		for (const std::wstring& name : names)
 		{
@@ -415,22 +420,25 @@ namespace
 			const session_totals& sums = with_offset.totals();
 			const session_totals& uniform_sums = uniform.totals();
 			const double audio = audio_link_kbit_per_second();
-			const double lowban_headers = kbit_per_second(
-				static_cast<int64_t>(sums.lowban_picture_packets + sums.lowban_geometry_packets) * packet_header_bytes,
-				duration);
-			const double h264_headers = kbit_per_second(
-				static_cast<int64_t>(sums.baseline_frames) * packet_header_bytes, duration);
+			const double lowban_headers = kbit_per_second(static_cast<int64_t>(sums.lowban_picture_packets +
+			                                                                   sums.lowban_geometry_packets) *
+			                                                  packet_header_bytes,
+			                                              duration);
+			const double h264_headers = kbit_per_second(static_cast<int64_t>(sums.baseline_frames) *
+			                                                packet_header_bytes,
+			                                            duration);
 
 			std::printf("%ls,%d,%.2f", name.c_str(), frames, duration);
 			std::printf(",%.1f,%.1f,%.1f,%.1f", sums.lowban_keyframe_bytes * 8.0 / 1000.0,
-				kbit_per_second(sums.lowban_picture_bytes, duration),
-				kbit_per_second(sums.lowban_geometry_bytes, duration),
-				kbit_per_second(sums.lowban_picture_bytes + sums.lowban_geometry_bytes, duration) + lowban_headers + audio);
+			            kbit_per_second(sums.lowban_picture_bytes, duration),
+			            kbit_per_second(sums.lowban_geometry_bytes, duration),
+			            kbit_per_second(sums.lowban_picture_bytes + sums.lowban_geometry_bytes, duration) +
+			                lowban_headers + audio);
 			print_scores(lowban_scores);
 			std::printf(",%.2f,%d", lowban_scores.mean_mouth(), sums.lowban_warped_packets);
 			std::printf(",%.1f,%.1f,%.1f", sums.baseline_first_frame_bytes * 8.0 / 1000.0,
-				kbit_per_second(sums.baseline_bytes, duration),
-				kbit_per_second(sums.baseline_bytes, duration) + h264_headers + audio);
+			            kbit_per_second(sums.baseline_bytes, duration),
+			            kbit_per_second(sums.baseline_bytes, duration) + h264_headers + audio);
 			print_scores(h264_scores);
 			std::printf(",%.2f", h264_scores.mean_mouth());
 			std::printf(",%.1f", kbit_per_second(uniform_sums.baseline_bytes, duration));
@@ -484,7 +492,8 @@ int run_sample_evaluation()
 			probe.face_offset = baseline_face_offset;
 			h264_wire wire;
 			std::string probe_error;
-			std::printf("h264_face_offset_active,%d\n", wire.open(probe, probe_error) && wire.face_offset_active() ? 1 : 0);
+			std::printf("h264_face_offset_active,%d\n",
+			            wire.open(probe, probe_error) && wire.face_offset_active() ? 1 : 0);
 			std::printf("audio_link_allowance_kbit_per_second,%.1f\n", audio_link_kbit_per_second());
 		}
 	}

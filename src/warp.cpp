@@ -41,14 +41,14 @@ namespace
 		const int64_t alift = adx * adx + ady * ady;
 		const int64_t blift = bdx * bdx + bdy * bdy;
 		const int64_t clift = cdx * cdx + cdy * cdy;
-		return adx * (bdy * clift - cdy * blift) - ady * (bdx * clift - cdx * blift)
-			+ alift * (bdx * cdy - cdx * bdy) > 0;
+		return adx * (bdy * clift - cdy * blift) - ady * (bdx * clift - cdx * blift) + alift * (bdx * cdy - cdx * bdy) >
+		       0;
 	}
 
 	point_i clamp_point(const point_i p)
 	{
 		return {std::clamp(p.x, -coordinate_limit, coordinate_limit),
-			std::clamp(p.y, -coordinate_limit, coordinate_limit)};
+		        std::clamp(p.y, -coordinate_limit, coordinate_limit)};
 	}
 
 	// Bilinear sample at a position in 1/256 pixel units, edges clamped.
@@ -61,7 +61,7 @@ namespace
 		const auto at = [&](const int64_t x, const int64_t y)
 		{
 			return static_cast<int>(img(static_cast<int>(std::clamp<int64_t>(x, 0, img.width() - 1)),
-				static_cast<int>(std::clamp<int64_t>(y, 0, img.height() - 1))));
+			                            static_cast<int>(std::clamp<int64_t>(y, 0, img.height() - 1))));
 		};
 		const int top = at(x0, y0) * (256 - ax) + at(x0 + 1, y0) * ax;
 		const int bottom = at(x0, y0 + 1) * (256 - ax) + at(x0 + 1, y0 + 1) * ax;
@@ -70,8 +70,8 @@ namespace
 
 	// Fills the pixels of triangle d0 d1 d2 by sampling the matching point of s0 s1 s2. The
 	// first triangle to reach a pixel keeps it, so shared edges are written exactly once.
-	void warp_triangle(const image_u8& reference, point_i s0, point_i s1, point_i s2,
-		const point_i d0, point_i d1, point_i d2, image_u8& covered, image_u8& out)
+	void warp_triangle(const image_u8& reference, point_i s0, point_i s1, point_i s2, const point_i d0, point_i d1,
+	                   point_i d2, image_u8& covered, image_u8& out)
 	{
 		int64_t area = cross(d0, d1, d2);
 		if (area == 0) return;
@@ -132,7 +132,7 @@ std::vector<point_i> face_mesh_points(const std::vector<point_i>& landmarks)
 	}
 	for (int i = 17; i <= 26; ++i)
 		mesh.push_back(clamp_point({landmarks[i].x + static_cast<int>(round_div(up_x * 9, 12 * 20)),
-			landmarks[i].y + static_cast<int>(round_div(up_y * 9, 12 * 20))}));
+		                            landmarks[i].y + static_cast<int>(round_div(up_y * 9, 12 * 20))}));
 	return mesh;
 }
 
@@ -239,8 +239,8 @@ bool warp_faces(const image_u8& reference, const face_geometry& from, const face
 		const std::vector<point_i> source = face_mesh_points(from[face]);
 		const std::vector<point_i> target = face_mesh_points(to[face]);
 		for (const mesh_triangle& t : delaunay_triangles(target))
-			warp_triangle(reference, source[t.a], source[t.b], source[t.c],
-				target[t.a], target[t.b], target[t.c], covered, out);
+			warp_triangle(reference, source[t.a], source[t.b], source[t.c], target[t.a], target[t.b], target[t.c],
+			              covered, out);
 		moved = true;
 	}
 	return moved;

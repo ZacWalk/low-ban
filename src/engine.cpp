@@ -58,8 +58,8 @@ namespace
 		SYSTEMTIME now = {};
 		GetLocalTime(&now);
 		wchar_t file[64] = {};
-		swprintf_s(file, L"clip-%04u%02u%02u-%02u%02u%02u.mp4", now.wYear, now.wMonth, now.wDay, now.wHour,
-			now.wMinute, now.wSecond);
+		swprintf_s(file, L"clip-%04u%02u%02u-%02u%02u%02u.mp4", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute,
+		           now.wSecond);
 		name = file;
 		return folder + L"\\" + name;
 	}

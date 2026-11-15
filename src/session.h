@@ -126,8 +126,8 @@ public:
 
 	// Runs every clock that is due at `seconds`, then fills `state` with what both receivers
 	// show. `predictor` measures expression on the received pictures; null skips that.
-	void process(const video_frame& frame, double seconds, const face_analysis& faces,
-		const shape_predictor* predictor, const session_options& options, render_state& state);
+	void process(const video_frame& frame, double seconds, const face_analysis& faces, const shape_predictor* predictor,
+	             const session_options& options, render_state& state);
 
 	const session_totals& totals() const { return sums; }
 
@@ -155,7 +155,7 @@ private:
 	void send_geometry(const face_geometry& smoothed, double seconds);
 	void send_picture(const image_u8& coded, const image_u8& coded_importance, double seconds);
 	void send_baseline(const image_u8& coded, const face_analysis& faces, double seconds,
-		const session_options& options);
+	                   const session_options& options);
 
 	int frame_width = 0;
 	int frame_height = 0;

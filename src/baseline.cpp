@@ -64,7 +64,7 @@ namespace
 	}
 
 	HRESULT make_sample(const uint8_t* bytes, const size_t length, const LONGLONG time, const LONGLONG duration,
-		ComPtr<IMFSample>& sample)
+	                    ComPtr<IMFSample>& sample)
 	{
 		ComPtr<IMFMediaBuffer> buffer;
 		HRESULT hr = MFCreateMemoryBuffer(static_cast<DWORD>(length), &buffer);
@@ -91,8 +91,8 @@ namespace
 		HRESULT hr = transform->GetOutputStreamInfo(0, &info);
 		if (FAILED(hr)) return hr;
 
-		const bool allocates = (info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES
-			| MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0;
+		const bool allocates = (info.dwFlags &
+		                        (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0;
 		ComPtr<IMFSample> provided;
 		if (!allocates)
 		{
@@ -170,7 +170,7 @@ namespace
 			const int type = stream[body] & 0x1f;
 			if (type == 6 || type == 9) continue;
 			kept.insert(kept.end(), stream.begin() + static_cast<ptrdiff_t>(begin),
-				stream.begin() + static_cast<ptrdiff_t>(end));
+			            stream.begin() + static_cast<ptrdiff_t>(end));
 		}
 		return kept;
 	}
@@ -219,11 +219,12 @@ bool h264_wire::impl::open_encoder(std::string& error)
 	// The encoder reads these when its output type is set, so they come first.
 	const bool constant_rate = settings.kbit_per_second > 0;
 	hr = set_property(api.Get(), CODECAPI_AVEncCommonRateControlMode, VT_UI4,
-		constant_rate ? eAVEncCommonRateControlMode_CBR : eAVEncCommonRateControlMode_Quality);
+	                  constant_rate ? eAVEncCommonRateControlMode_CBR : eAVEncCommonRateControlMode_Quality);
 	if (SUCCEEDED(hr))
 		hr = constant_rate
-			? set_property(api.Get(), CODECAPI_AVEncCommonMeanBitRate, VT_UI4, settings.kbit_per_second * 1000ull)
-			: set_property(api.Get(), CODECAPI_AVEncVideoEncodeQP, VT_UI8, static_cast<ULONGLONG>(settings.quantizer));
+		         ? set_property(api.Get(), CODECAPI_AVEncCommonMeanBitRate, VT_UI4, settings.kbit_per_second * 1000ull)
+		         : set_property(api.Get(), CODECAPI_AVEncVideoEncodeQP, VT_UI8,
+		                        static_cast<ULONGLONG>(settings.quantizer));
 	if (FAILED(hr))
 	{
 		error = failure("the H.264 encoder rejected its rate control settings", hr);
@@ -239,8 +240,8 @@ bool h264_wire::impl::open_encoder(std::string& error)
 	set_property(api.Get(), CODECAPI_AVEncMPVGOPSize, VT_UI4, group_of_pictures);
 	set_property(api.Get(), CODECAPI_AVEncCommonQualityVsSpeed, VT_UI4, 100);
 	set_property(api.Get(), CODECAPI_AVEncH264CABACEnable, VT_BOOL, 1);
-	face_offset = settings.face_offset != 0
-		&& SUCCEEDED(set_property(api.Get(), CODECAPI_AVEncVideoROIEnabled, VT_UI4, 1));
+	face_offset = settings.face_offset != 0 &&
+	              SUCCEEDED(set_property(api.Get(), CODECAPI_AVEncVideoROIEnabled, VT_UI4, 1));
 
 	ComPtr<IMFMediaType> output;
 	hr = video_type(MFVideoFormat_H264, settings, output);
@@ -265,8 +266,8 @@ bool h264_wire::impl::open_encoder(std::string& error)
 
 	ComPtr<IMFMediaType> current;
 	UINT32 header_size = 0;
-	if (SUCCEEDED(encoder->GetOutputCurrentType(0, &current))
-		&& SUCCEEDED(current->GetBlobSize(MF_MT_MPEG_SEQUENCE_HEADER, &header_size)) && header_size > 0)
+	if (SUCCEEDED(encoder->GetOutputCurrentType(0, &current)) &&
+	    SUCCEEDED(current->GetBlobSize(MF_MT_MPEG_SEQUENCE_HEADER, &header_size)) && header_size > 0)
 	{
 		sequence_header.resize(header_size);
 		if (FAILED(current->GetBlob(MF_MT_MPEG_SEQUENCE_HEADER, sequence_header.data(), header_size, nullptr)))
@@ -342,8 +343,8 @@ bool h264_wire::impl::choose_decoder_output(std::string& error)
 		decoded_height = 0;
 		MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &decoded_width, &decoded_height);
 		UINT32 stride = 0;
-		decoded_stride = SUCCEEDED(type->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride))
-			? static_cast<LONG>(stride) : static_cast<LONG>(decoded_width);
+		decoded_stride = SUCCEEDED(type->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride)) ? static_cast<LONG>(stride)
+		                                                                           : static_cast<LONG>(decoded_width);
 		return true;
 	}
 }
@@ -353,7 +354,7 @@ HRESULT h264_wire::impl::drain_encoder(std::vector<uint8_t>& bytes)
 	for (;;)
 	{
 		ComPtr<IMFSample> sample;
-		HRESULT hr = pull_output(encoder.Get(), static_cast<DWORD>(settings.width * settings.height * 2), sample);
+		HRESULT hr = pull_output(encoder.Get(), static_cast<DWORD>(settings.width) * settings.height * 2, sample);
 		if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return S_OK;
 		if (hr == MF_E_TRANSFORM_STREAM_CHANGE)
 		{
@@ -439,8 +440,8 @@ h264_wire::~h264_wire()
 bool h264_wire::open(const h264_settings& settings, std::string& error)
 {
 	close();
-	if (settings.width <= 0 || settings.height <= 0 || settings.width % 2 != 0 || settings.height % 2 != 0
-		|| settings.frames_per_second <= 0)
+	if (settings.width <= 0 || settings.height <= 0 || settings.width % 2 != 0 || settings.height % 2 != 0 ||
+	    settings.frames_per_second <= 0)
 	{
 		error = "the H.264 wire needs an even frame size and a frame rate";
 		return false;
@@ -472,7 +473,7 @@ bool h264_wire::face_offset_active() const
 }
 
 bool h264_wire::encode(const image_u8& luma, const std::vector<rect_i>& faces, std::vector<uint8_t>& bytes,
-	std::string& error)
+                       std::string& error)
 {
 	bytes.clear();
 	if (!is_open())
@@ -494,8 +495,8 @@ bool h264_wire::encode(const image_u8& luma, const std::vector<rect_i>& faces, s
 	for (int y = 0; y < height; ++y) std::memcpy(nv12.data() + static_cast<size_t>(y) * width, luma.row(y), width);
 
 	ComPtr<IMFSample> sample;
-	HRESULT hr = make_sample(nv12.data(), nv12.size(), wire.encoded_frames * wire.frame_duration,
-		wire.frame_duration, sample);
+	HRESULT hr = make_sample(nv12.data(), nv12.size(), wire.encoded_frames * wire.frame_duration, wire.frame_duration,
+	                         sample);
 	if (SUCCEEDED(hr) && wire.face_offset && !faces.empty())
 	{
 		// The encoder takes one rectangle per frame, so several faces share their union.
@@ -562,8 +563,8 @@ bool h264_wire::decode(const std::vector<uint8_t>& bytes, image_u8& picture, std
 
 	impl& wire = *state;
 	ComPtr<IMFSample> sample;
-	HRESULT hr = make_sample(bytes.data(), bytes.size(), wire.decoded_frames * wire.frame_duration,
-		wire.frame_duration, sample);
+	HRESULT hr = make_sample(bytes.data(), bytes.size(), wire.decoded_frames * wire.frame_duration, wire.frame_duration,
+	                         sample);
 	++wire.decoded_frames;
 	if (SUCCEEDED(hr)) hr = wire.decoder->ProcessInput(0, sample.Get(), 0);
 	if (hr == MF_E_NOTACCEPTING)
@@ -604,7 +605,7 @@ bool h264_safe_to_use(std::string& reason)
 		if (!CreateProcessW(path, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process))
 		{
 			why = failure("could not start a process to test Windows' H.264 encoder",
-				HRESULT_FROM_WIN32(GetLastError()));
+			              HRESULT_FROM_WIN32(GetLastError()));
 			return;
 		}
 		CloseHandle(process.hThread);
@@ -616,7 +617,8 @@ bool h264_safe_to_use(std::string& reason)
 		CloseHandle(process.hProcess);
 
 		if (waited != WAIT_OBJECT_0) why = "Windows' H.264 encoder hung in a test process";
-		else if (code != 0) why = failure("Windows' H.264 encoder crashed in a test process", static_cast<HRESULT>(code));
+		else if (code != 0)
+			why = failure("Windows' H.264 encoder crashed in a test process", static_cast<HRESULT>(code));
 		else safe = true;
 	});
 
@@ -653,8 +655,8 @@ int run_h264_probe()
 		image_u8 picture;
 		bool working = wire.open(settings, error);
 		for (int i = 0; working && i < 3; ++i)
-			working = wire.encode(frame, {rect_i::from_size(100, 60, 120, 120)}, bytes, error)
-				&& wire.decode(bytes, picture, error);
+			working = wire.encode(frame, {rect_i::from_size(100, 60, 120, 120)}, bytes, error) &&
+			          wire.decode(bytes, picture, error);
 	}
 	if (started) MFShutdown();
 	if (SUCCEEDED(com)) CoUninitialize();

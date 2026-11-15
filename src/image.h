@@ -40,17 +40,13 @@ struct rect_i
 	int height() const { return bottom - top + 1; }
 	bool empty() const { return right < left || bottom < top; }
 
-	static rect_i from_size(const int x, const int y, const int w, const int h)
-	{
-		return {x, y, x + w - 1, y + h - 1};
-	}
+	static rect_i from_size(const int x, const int y, const int w, const int h) { return {x, y, x + w - 1, y + h - 1}; }
 };
 
 // Landmark sets, one per face. Faces are paired between frames by index.
 using face_geometry = std::vector<std::vector<point_i>>;
 
-template <typename T>
-class image
+template <typename T> class image
 {
 	int frame_width = 0;
 	int frame_height = 0;
@@ -59,8 +55,8 @@ class image
 public:
 	image() = default;
 
-	image(const int w, const int h) : frame_width(w), frame_height(h),
-	                                  frame_pixels(static_cast<size_t>(w) * static_cast<size_t>(h))
+	image(const int w, const int h) :
+		frame_width(w), frame_height(h), frame_pixels(static_cast<size_t>(w) * static_cast<size_t>(h))
 	{
 	}
 
@@ -78,16 +74,10 @@ public:
 	T& operator()(const int x, const int y) { return row(y)[x]; }
 	const T& operator()(const int x, const int y) const { return row(y)[x]; }
 
-	bool contains(const int x, const int y) const
-	{
-		return x >= 0 && y >= 0 && x < frame_width && y < frame_height;
-	}
+	bool contains(const int x, const int y) const { return x >= 0 && y >= 0 && x < frame_width && y < frame_height; }
 
 	// Zero outside the image; the landmark sampler relies on this.
-	T sample_or_zero(const int x, const int y) const
-	{
-		return contains(x, y) ? row(y)[x] : T{};
-	}
+	T sample_or_zero(const int x, const int y) const { return contains(x, y) ? row(y)[x] : T{}; }
 
 	void resize(const int w, const int h)
 	{
@@ -128,7 +118,7 @@ void encode_yuy2(const video_frame& frame, std::vector<uint8_t>& buffer);
 // Decodes NV12 - a luma plane of `plane_rows` rows, then interleaved Cb Cr at half size in
 // both directions - into the planes decode_yuy2 produces, repeating each chroma row.
 bool decode_nv12(video_frame& out, const uint8_t* buffer, size_t buffer_len, int width, int height, int stride,
-	int plane_rows);
+                 int plane_rows);
 
 void yuv_to_bgra(const video_frame& frame, std::vector<uint8_t>& bgra);
 

@@ -70,13 +70,13 @@ bool decode_nv12(video_frame& out, const uint8_t* buffer, const size_t buffer_le
 {
 	if (buffer == nullptr || width <= 1 || height <= 1 || (width & 1) != 0 || (height & 1) != 0) return false;
 	if (stride < width || plane_rows < height) return false;
-	if (buffer_len < static_cast<size_t>(stride) * plane_rows + static_cast<size_t>(stride) * (height / 2)) return false;
+	if (buffer_len < static_cast<size_t>(stride) * plane_rows + static_cast<size_t>(stride) * (height / 2))
+		return false;
 
 	out.luma.resize(width, height);
 	out.cb.resize(width / 2, height);
 	out.cr.resize(width / 2, height);
-	for (int y = 0; y < height; ++y)
-		std::memcpy(out.luma.row(y), buffer + static_cast<size_t>(y) * stride, width);
+	for (int y = 0; y < height; ++y) std::memcpy(out.luma.row(y), buffer + static_cast<size_t>(y) * stride, width);
 
 	const uint8_t* chroma = buffer + static_cast<size_t>(stride) * plane_rows;
 	for (int y = 0; y < height; ++y)
@@ -179,8 +179,7 @@ void gaussian_blur(const image_u8& src, image_u8& dst)
 		for (int x = 0; x < w; ++x)
 		{
 			int sum = 0;
-			for (int k = -2; k <= 2; ++k)
-				sum += kernel[k + 2] * in[std::clamp(x + k, 0, w - 1)];
+			for (int k = -2; k <= 2; ++k) sum += kernel[k + 2] * in[std::clamp(x + k, 0, w - 1)];
 			out[x] = static_cast<uint16_t>(sum);
 		}
 	}
@@ -191,8 +190,7 @@ void gaussian_blur(const image_u8& src, image_u8& dst)
 		for (int x = 0; x < w; ++x)
 		{
 			int sum = 0;
-			for (int k = -2; k <= 2; ++k)
-				sum += kernel[k + 2] * tmp.row(std::clamp(y + k, 0, h - 1))[x];
+			for (int k = -2; k <= 2; ++k) sum += kernel[k + 2] * tmp.row(std::clamp(y + k, 0, h - 1))[x];
 			out[x] = clamp_u8(sum / 256);
 		}
 	}
@@ -217,10 +215,9 @@ void sobel_edges(const image_u8& src, image_u8& dst)
 
 		for (int x = 1; x < w - 1; ++x)
 		{
-			gx(x, y) = static_cast<int16_t>((r0[x + 1] + 2 * r1[x + 1] + r2[x + 1])
-				- (r0[x - 1] + 2 * r1[x - 1] + r2[x - 1]));
-			gy(x, y) = static_cast<int16_t>((r2[x - 1] + 2 * r2[x] + r2[x + 1])
-				- (r0[x - 1] + 2 * r0[x] + r0[x + 1]));
+			gx(x, y) = static_cast<int16_t>((r0[x + 1] + 2 * r1[x + 1] + r2[x + 1]) -
+			                                (r0[x - 1] + 2 * r1[x - 1] + r2[x - 1]));
+			gy(x, y) = static_cast<int16_t>((r2[x - 1] + 2 * r2[x] + r2[x + 1]) - (r0[x - 1] + 2 * r0[x] + r0[x + 1]));
 		}
 	}
 

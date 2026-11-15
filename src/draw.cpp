@@ -21,15 +21,15 @@ namespace
 	};
 
 	constexpr feature_run face_runs[] = {
-		{0, 16, false}, // jaw
+		{0, 16, false},  // jaw
 		{17, 21, false}, // left brow
 		{22, 26, false}, // right brow
 		{27, 30, false}, // nose bridge
 		{31, 35, false}, // nostrils
-		{36, 41, true}, // left eye
-		{42, 47, true}, // right eye
-		{48, 59, true}, // outer lip
-		{60, 67, true}, // inner lip
+		{36, 41, true},  // left eye
+		{42, 47, true},  // right eye
+		{48, 59, true},  // outer lip
+		{60, 67, true},  // inner lip
 	};
 }
 
@@ -95,8 +95,8 @@ void draw_face(image_u8& img, const std::vector<point_i>& parts, const uint8_t c
 
 	const auto segment = [&](const int a, const int b)
 	{
-		draw_line(img, static_cast<float>(parts[a].x), static_cast<float>(parts[a].y),
-		          static_cast<float>(parts[b].x), static_cast<float>(parts[b].y), colour);
+		draw_line(img, static_cast<float>(parts[a].x), static_cast<float>(parts[a].y), static_cast<float>(parts[b].x),
+		          static_cast<float>(parts[b].y), colour);
 	};
 
 	for (const auto& run : face_runs)

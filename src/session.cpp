@@ -31,7 +31,7 @@ namespace
 	// Landmarks found in a received picture, from the same boxes the source was landmarked
 	// with, against the source's own landmarks. Averaged over the faces.
 	bool measure_expression(const shape_predictor& predictor, const image_u8& picture, const face_analysis& faces,
-		landmark_error& error)
+	                        landmark_error& error)
 	{
 		if (picture.empty()) return false;
 		landmark_error total;
@@ -60,7 +60,7 @@ double audio_link_kbit_per_second()
 rect_i coded_box(const rect_i& box)
 {
 	return {floor_div(box.left, coded_scale), floor_div(box.top, coded_scale), floor_div(box.right, coded_scale),
-		floor_div(box.bottom, coded_scale)};
+	        floor_div(box.bottom, coded_scale)};
 }
 
 void face_tracker::reset()
@@ -69,7 +69,7 @@ void face_tracker::reset()
 }
 
 face_analysis face_tracker::analyse(const face_detector& detector, const shape_predictor* predictor,
-	const video_frame& frame)
+                                    const video_frame& frame)
 {
 	face_analysis result;
 	face_detection detected = detector.detect(frame);
@@ -96,8 +96,8 @@ face_analysis face_tracker::analyse(const face_detector& detector, const shape_p
 		// Only trust the refinement if it stayed near the box it came from, so a bad
 		// prediction cannot drag the tracker away frame after frame.
 		const rect_i refined = predictor->box_from_parts(parts);
-		if (!refined.empty() && refined.width() * 2 > box.width() && refined.width() < box.width() * 2
-			&& overlap_area(refined, box) * 2 > box.width() * box.height())
+		if (!refined.empty() && refined.width() * 2 > box.width() && refined.width() < box.width() * 2 &&
+		    overlap_area(refined, box) * 2 > box.width() * box.height())
 			tracked.push_back(refined);
 
 		result.landmarked.push_back(box);
@@ -190,12 +190,14 @@ void call_session::send_picture(const image_u8& coded, const image_u8& coded_imp
 	// geometry stream has sent, not what the tracker found.
 	const bool startup = !picture_started;
 	const transform_packet packet = picture_wire.encode(codec, coded, &coded_importance, startup,
-		startup ? 0 : picture_packet_budget, scale_geometry(geometry_wire.transmitted(), coded_scale));
+	                                                    startup ? 0 : picture_packet_budget,
+	                                                    scale_geometry(geometry_wire.transmitted(), coded_scale));
 	if (packet.bytes.empty()) return;
 
 	image_u8 decoded;
 	if (!picture_wire.decode(codec, packet, coded.width(), coded.height(), decoded,
-		scale_geometry(received_geometry, coded_scale))) return;
+	                         scale_geometry(received_geometry, coded_scale)))
+		return;
 	picture_started = true;
 	animation_stale = true;
 	lowban_updated_blocks = packet.updated_blocks;
@@ -216,7 +218,7 @@ void call_session::send_picture(const image_u8& coded, const image_u8& coded_imp
 }
 
 void call_session::send_baseline(const image_u8& coded, const face_analysis& faces, const double seconds,
-	const session_options& options)
+                                 const session_options& options)
 {
 	if (!baseline_tried)
 	{
@@ -234,6 +236,7 @@ void call_session::send_baseline(const image_u8& coded, const face_analysis& fac
 
 	// The same faces the importance map is built from, at the coded size.
 	std::vector<rect_i> boxes;
+	boxes.reserve(faces.landmarked.size());
 	for (const rect_i& box : faces.landmarked) boxes.push_back(coded_box(box));
 
 	std::vector<uint8_t> bytes;
@@ -261,7 +264,7 @@ void call_session::send_baseline(const image_u8& coded, const face_analysis& fac
 }
 
 void call_session::process(const video_frame& frame, const double seconds, const face_analysis& faces,
-	const shape_predictor* predictor, const session_options& options, render_state& state)
+                           const shape_predictor* predictor, const session_options& options, render_state& state)
 {
 	const int width = frame.width();
 	const int height = frame.height();
@@ -316,8 +319,8 @@ void call_session::process(const video_frame& frame, const double seconds, const
 	{
 		view.picture = shown;
 		view.quality = measure_quality(frame.luma, shown, &importance);
-		view.expression_measured = can_measure_expression
-			&& measure_expression(*predictor, shown, faces, view.expression);
+		view.expression_measured = can_measure_expression &&
+		                           measure_expression(*predictor, shown, faces, view.expression);
 	};
 	receive(state.lowban, lowban_shown);
 	receive(state.baseline, baseline_shown);
@@ -327,16 +330,16 @@ void call_session::process(const video_frame& frame, const double seconds, const
 	const double picture_bits = lowban_picture_rate.bits_per_second(seconds, picture_interval_seconds);
 	const double geometry_bits = lowban_geometry_rate.bits_per_second(seconds, geometry_tick);
 	state.lowban.payload_kbit_per_second = (picture_bits + geometry_bits) / 1000.0;
-	state.lowban.link_kbit_per_second = state.lowban.payload_kbit_per_second
-		+ lowban_header_rate.bits_per_second(seconds, geometry_tick) / 1000.0 + audio;
+	state.lowban.link_kbit_per_second = state.lowban.payload_kbit_per_second +
+	                                    lowban_header_rate.bits_per_second(seconds, geometry_tick) / 1000.0 + audio;
 	state.lowban_geometry_kbit_per_second = geometry_bits / 1000.0;
 	state.lowban_updated_blocks = lowban_updated_blocks;
 	state.lowban_keyframe = lowban_keyframe;
 	state.lowban_warped = lowban_warped;
 
 	state.baseline.payload_kbit_per_second = baseline_rate.bits_per_second(seconds, geometry_tick) / 1000.0;
-	state.baseline.link_kbit_per_second = state.baseline.payload_kbit_per_second
-		+ baseline_header_rate.bits_per_second(seconds, geometry_tick) / 1000.0 + audio;
+	state.baseline.link_kbit_per_second = state.baseline.payload_kbit_per_second +
+	                                      baseline_header_rate.bits_per_second(seconds, geometry_tick) / 1000.0 + audio;
 	state.baseline_face_offset = baseline.face_offset_active();
 	state.baseline_status = baseline_status;
 

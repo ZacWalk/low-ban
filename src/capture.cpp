@@ -76,10 +76,8 @@ namespace
 		case MF_E_HW_MFT_FAILED_START_STREAMING:
 		case MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED:
 			return std::string("the camera is in use by another application") + code;
-		case MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED:
-			return std::string("the camera was disconnected") + code;
-		default:
-			return std::string("the camera stopped delivering frames") + code;
+		case MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED: return std::string("the camera was disconnected") + code;
+		default: return std::string("the camera stopped delivering frames") + code;
 		}
 	}
 
@@ -188,7 +186,7 @@ bool webcam::open(const int width, const int height, std::string& error)
 
 	ComPtr<IMFAttributes> attributes;
 	if (FAILED(MFCreateAttributes(&attributes, 1)) ||
-		FAILED(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE)))
+	    FAILED(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE)))
 	{
 		error = "could not configure the source reader";
 		return false;
@@ -258,8 +256,7 @@ bool webcam::read(video_frame& frame, std::string& error)
 
 	// A failed read, an error flag or the end of the stream all mean the reader is finished;
 	// retrying would only spin on the same failure with nothing on screen to say why.
-	const HRESULT hr = state->reader->ReadSample(first_video_stream, 0, &stream_index, &flags,
-	                                             &timestamp, &sample);
+	const HRESULT hr = state->reader->ReadSample(first_video_stream, 0, &stream_index, &flags, &timestamp, &sample);
 	if (FAILED(hr))
 	{
 		error = describe_read_failure(hr);
@@ -311,7 +308,7 @@ namespace
 	}
 
 	HRESULT describe_video(IMFMediaType* type, const GUID& subtype, const int width, const int height,
-		const int frames_per_second)
+	                       const int frames_per_second)
 	{
 		HRESULT hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
 		if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, subtype);
@@ -352,7 +349,7 @@ int clip_writer::frames() const
 }
 
 bool clip_writer::open(const std::wstring& path, const int width, const int height, const int frames_per_second,
-	std::string& error)
+                       std::string& error)
 {
 	std::string ignored;
 	close(ignored);
@@ -505,10 +502,10 @@ bool clip_reader::open(const std::wstring& path, const int width, const int heig
 	}
 
 	ComPtr<IMFMediaType> current;
-	if (!chosen || FAILED(owned->reader->GetCurrentMediaType(first_video_stream, &current))
-		|| FAILED(current->GetGUID(MF_MT_SUBTYPE, &owned->subtype))
-		|| FAILED(MFGetAttributeSize(current.Get(), MF_MT_FRAME_SIZE, &owned->width, &owned->height))
-		|| owned->width != static_cast<UINT32>(width) || owned->height != static_cast<UINT32>(height))
+	if (!chosen || FAILED(owned->reader->GetCurrentMediaType(first_video_stream, &current)) ||
+	    FAILED(current->GetGUID(MF_MT_SUBTYPE, &owned->subtype)) ||
+	    FAILED(MFGetAttributeSize(current.Get(), MF_MT_FRAME_SIZE, &owned->width, &owned->height)) ||
+	    owned->width != static_cast<UINT32>(width) || owned->height != static_cast<UINT32>(height))
 	{
 		error = "the clip cannot be converted to the capture format";
 		return false;
@@ -516,8 +513,8 @@ bool clip_reader::open(const std::wstring& path, const int width, const int heig
 
 	UINT32 stride = 0;
 	owned->stride = SUCCEEDED(current->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride))
-		? static_cast<LONG>(static_cast<INT32>(stride))
-		: static_cast<LONG>(owned->subtype == MFVideoFormat_YUY2 ? width * 2 : width);
+	                    ? static_cast<LONG>(static_cast<INT32>(stride))
+	                    : static_cast<LONG>(owned->subtype == MFVideoFormat_YUY2 ? width * 2 : width);
 
 	state = owned.release();
 	return true;
@@ -562,8 +559,8 @@ bool clip_reader::read(video_frame& frame, double& seconds, std::string& error)
 		const int width = static_cast<int>(state->width);
 		const int height = static_cast<int>(state->height);
 		const bool decoded = state->subtype == MFVideoFormat_YUY2
-			? decode_yuy2(frame, bytes, length, width, height, state->stride)
-			: decode_nv12(frame, bytes, length, width, height, std::abs(state->stride), height);
+		                         ? decode_yuy2(frame, bytes, length, width, height, state->stride)
+		                         : decode_nv12(frame, bytes, length, width, height, std::abs(state->stride), height);
 		buffer->Unlock();
 		if (!decoded)
 		{

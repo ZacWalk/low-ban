@@ -25,7 +25,7 @@ endif()
 include(FetchContent)
 FetchContent_Declare(libdesktop
     GIT_REPOSITORY https://github.com/ZacWalk/libdesktop.git
-    GIT_TAG        04109ee82a500db38d439fa281bbc3f43124adfe
+    GIT_TAG        d172a12c6e3df0831a641133b96d073559a99db5
 )
 FetchContent_MakeAvailable(libdesktop)
 
@@ -66,7 +66,7 @@ target_sources(low-ban PRIVATE
 target_compile_features(low-ban PRIVATE cxx_std_20)
 target_include_directories(low-ban PRIVATE src)
 target_compile_definitions(low-ban PRIVATE WIN32 _WINDOWS NOMINMAX UNICODE _UNICODE)
-target_compile_options(low-ban PRIVATE /W3 /MP /permissive-)
+target_compile_options(low-ban PRIVATE /W4 /MP /permissive-)
 target_link_libraries(low-ban PRIVATE libdesktop::ui windowscodecs)
 
 set_target_properties(low-ban PROPERTIES
@@ -80,14 +80,15 @@ include(CTest)
 if(BUILD_TESTING)
     add_executable(low_ban_tests tests/smoke.cpp)
     target_compile_features(low_ban_tests PRIVATE cxx_std_17)
+    target_compile_options(low_ban_tests PRIVATE /W4)
     add_test(NAME low_ban_unit COMMAND low_ban_tests)
-    set_tests_properties(low_ban_unit PROPERTIES TIMEOUT 30 LABELS low-ban)
+    set_tests_properties(low_ban_unit PROPERTIES TIMEOUT 30 LABELS "low-ban;headless")
 
     add_test(NAME low_ban_selftest COMMAND low-ban /test)
     set_tests_properties(low_ban_selftest PROPERTIES
-        TIMEOUT 120 LABELS low-ban WORKING_DIRECTORY "$<TARGET_FILE_DIR:low-ban>")
+        TIMEOUT 120 LABELS "low-ban;headless" WORKING_DIRECTORY "$<TARGET_FILE_DIR:low-ban>")
 
     add_test(NAME low_ban_manifest COMMAND "${CMAKE_COMMAND}"
         "-DEXE=$<TARGET_FILE:low-ban>" -P "${PROJECT_SOURCE_DIR}/tests/manifest.cmake")
-    set_tests_properties(low_ban_manifest PROPERTIES TIMEOUT 30 LABELS low-ban)
+    set_tests_properties(low_ban_manifest PROPERTIES TIMEOUT 30 LABELS "low-ban;headless")
 endif()

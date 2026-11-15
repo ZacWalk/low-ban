@@ -54,7 +54,7 @@ namespace
 	// The trained boxes span hairline to chin, wider than the square the landmark model
 	// wants. The engine refits the box from the first prediction, so this only has to be
 	// close.
-	constexpr float box_top_fraction = 0.20f; // of the detected height
+	constexpr float box_top_fraction = 0.20f;  // of the detected height
 	constexpr float box_side_fraction = 1.00f; // of the detected width
 
 	struct blob
@@ -66,15 +66,12 @@ namespace
 
 		blob() = default;
 
-		blob(const int r, const int c, const int ch) : rows(r), cols(c), channels(ch),
-		                                               values(static_cast<size_t>(r) * c * ch, 0.0f)
+		blob(const int r, const int c, const int ch) :
+			rows(r), cols(c), channels(ch), values(static_cast<size_t>(r) * c * ch, 0.0f)
 		{
 		}
 
-		float* at(const int r, const int c)
-		{
-			return values.data() + (static_cast<size_t>(r) * cols + c) * channels;
-		}
+		float* at(const int r, const int c) { return values.data() + (static_cast<size_t>(r) * cols + c) * channels; }
 
 		const float* at(const int r, const int c) const
 		{
@@ -117,8 +114,8 @@ namespace
 				float* out = output.at(r, c);
 				for (int f = 0; f < filter.num_filters; ++f)
 				{
-					out[f] = dot(in, filter.weights + static_cast<size_t>(f) * filter.channels, filter.channels)
-						+ filter.biases[f];
+					out[f] = dot(in, filter.weights + static_cast<size_t>(f) * filter.channels, filter.channels) +
+					         filter.biases[f];
 				}
 			}
 		}
@@ -303,8 +300,8 @@ namespace
 	}
 
 	// Turns one pyramid level into scored boxes in detection-image pixels.
-	void collect(const blob& cls, const blob& obj, const blob& reg, const int stride,
-	             std::vector<candidate>& out, float& peak)
+	void collect(const blob& cls, const blob& obj, const blob& reg, const int stride, std::vector<candidate>& out,
+	             float& peak)
 	{
 		if (cls.empty() || obj.empty() || reg.empty() || reg.channels < 4) return;
 
@@ -396,20 +393,17 @@ face_detection face_detector::detect(const video_frame& frame) const
 	std::vector<candidate> boxes;
 
 	level5 = convolution_dp(level5, layer[27], layer[28]);
-	collect(convolution_dp(level5, layer[33], layer[34], false),
-	        convolution_dp(level5, layer[45], layer[46], false),
+	collect(convolution_dp(level5, layer[33], layer[34], false), convolution_dp(level5, layer[45], layer[46], false),
 	        convolution_dp(level5, layer[39], layer[40], false), 32, boxes, result.peak_confidence);
 
 	add_upsampled(level5, level4);
 	level4 = convolution_dp(level4, layer[25], layer[26]);
-	collect(convolution_dp(level4, layer[31], layer[32], false),
-	        convolution_dp(level4, layer[43], layer[44], false),
+	collect(convolution_dp(level4, layer[31], layer[32], false), convolution_dp(level4, layer[43], layer[44], false),
 	        convolution_dp(level4, layer[37], layer[38], false), 16, boxes, result.peak_confidence);
 
 	add_upsampled(level4, level3);
 	level3 = convolution_dp(level3, layer[23], layer[24]);
-	collect(convolution_dp(level3, layer[29], layer[30], false),
-	        convolution_dp(level3, layer[41], layer[42], false),
+	collect(convolution_dp(level3, layer[29], layer[30], false), convolution_dp(level3, layer[41], layer[42], false),
 	        convolution_dp(level3, layer[35], layer[36], false), 8, boxes, result.peak_confidence);
 
 	suppress(boxes);
@@ -426,10 +420,9 @@ face_detection face_detector::detect(const video_frame& frame) const
 		const float left = x + w / 2 - side / 2;
 		const float top = y + h * box_top_fraction;
 
-		result.faces.push_back(rect_i::from_size(static_cast<int>(std::lround(left)),
-		                                         static_cast<int>(std::lround(top)),
-		                                         static_cast<int>(std::lround(side)),
-		                                         static_cast<int>(std::lround(side))));
+		result.faces.push_back(
+			rect_i::from_size(static_cast<int>(std::lround(left)), static_cast<int>(std::lround(top)),
+		                      static_cast<int>(std::lround(side)), static_cast<int>(std::lround(side))));
 	}
 
 	return result;

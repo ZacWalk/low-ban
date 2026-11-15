@@ -40,8 +40,8 @@ namespace
 
 	// Three-step search seeded with the previous block's vector, which is nearly free because
 	// neighbouring blocks of one moving head share a vector. 32 comparisons, not 1,089.
-	point_i search_motion(const image_u8& source, const image_u8& reference,
-		const int block_x, const int block_y, const point_i seed)
+	point_i search_motion(const image_u8& source, const image_u8& reference, const int block_x, const int block_y,
+	                      const point_i seed)
 	{
 		const auto cost = [&](const int dx, const int dy)
 		{
@@ -111,8 +111,7 @@ namespace
 			value >>= 7;
 			if (value != 0) byte |= 0x80;
 			bytes.push_back(byte);
-		}
-		while (value != 0);
+		} while (value != 0);
 	}
 
 	bool read_varuint(const std::vector<uint8_t>& bytes, size_t& offset, uint32_t& value)
@@ -139,7 +138,7 @@ namespace
 	}
 
 	void append_packet_header(std::vector<uint8_t>& bytes, const uint8_t kind, const uint8_t version,
-		const bool keyframe, const int width, const int height, const int unit_count)
+	                          const bool keyframe, const int width, const int height, const int unit_count)
 	{
 		bytes = {'L', kind, version, static_cast<uint8_t>(keyframe ? 1 : 0)};
 		append_u16(bytes, width);
@@ -169,10 +168,10 @@ namespace
 			for (int frequency = 0; frequency < transform_codec::block_size; ++frequency)
 			{
 				const float scale = frequency == 0 ? std::sqrt(1.0f / transform_codec::block_size)
-					: std::sqrt(2.0f / transform_codec::block_size);
+				                                   : std::sqrt(2.0f / transform_codec::block_size);
 				for (int position = 0; position < transform_codec::block_size; ++position)
-					basis[frequency][position] = scale
-						* std::cos(pi * (2 * position + 1) * frequency / (2 * transform_codec::block_size));
+					basis[frequency][position] = scale * std::cos(pi * (2 * position + 1) * frequency /
+					                                              (2 * transform_codec::block_size));
 			}
 		}
 	};
@@ -184,6 +183,7 @@ namespace
 	}
 
 	// Low frequencies first, so the zero runs between surviving coefficients are long.
+	// clang-format off
 	constexpr uint8_t scan_order[transform_codec::block_coefficients] = {
 		 0,  1,  8, 16,  9,  2,  3, 10,
 		17, 24, 32, 25, 18, 11,  4,  5,
@@ -193,6 +193,7 @@ namespace
 		29, 22, 15, 23, 30, 37, 44, 51,
 		58, 59, 52, 45, 38, 31, 39, 46,
 		53, 60, 61, 54, 47, 55, 62, 63};
+	// clang-format on
 
 	// One byte carries a zero run up to 15 and a level in -7..7, which is what almost every
 	// motion-compensated residual coefficient turns out to be. Zero escapes to full varints.
@@ -223,8 +224,7 @@ namespace
 		}
 		uint32_t encoded_run = 0;
 		uint32_t encoded_level = 0;
-		if (!read_varuint(bytes, offset, encoded_run) || !read_varuint(bytes, offset, encoded_level))
-			return false;
+		if (!read_varuint(bytes, offset, encoded_run) || !read_varuint(bytes, offset, encoded_level)) return false;
 		if (encoded_run >= transform_codec::block_coefficients) return false;
 		run = static_cast<int>(encoded_run);
 		level = zigzag_decode(encoded_level);
@@ -236,8 +236,8 @@ namespace
 	// keeps its coefficients exactly. Both ends call this with identical arguments, so it costs
 	// nothing on the wire. Returns the blocks it changed.
 	std::vector<int> warp_held_blocks(const transform_codec& codec, const image_u8& reference,
-		const std::vector<uint8_t>& quantizers, const face_geometry& from, const face_geometry& to,
-		std::vector<int16_t>& coefficients)
+	                                  const std::vector<uint8_t>& quantizers, const face_geometry& from,
+	                                  const face_geometry& to, std::vector<int16_t>& coefficients)
 	{
 		std::vector<int> changed;
 		image_u8 warped;
@@ -259,7 +259,7 @@ namespace
 
 			codec.predict_block(warped, block_x, block_y, 0, 0, quantizers[block], predicted);
 			std::copy(predicted, predicted + transform_codec::block_coefficients,
-				coefficients.begin() + static_cast<ptrdiff_t>(block) * transform_codec::block_coefficients);
+			          coefficients.begin() + static_cast<ptrdiff_t>(block) * transform_codec::block_coefficients);
 			changed.push_back(block);
 		}
 		return changed;
@@ -267,7 +267,7 @@ namespace
 }
 
 reconstruction_quality measure_quality(const image_u8& source, const image_u8& reconstructed,
-	                                    const image_u8* importance)
+                                       const image_u8* importance)
 {
 	reconstruction_quality quality;
 	if (source.width() != reconstructed.width() || source.height() != reconstructed.height() || source.empty())
@@ -276,8 +276,8 @@ reconstruction_quality measure_quality(const image_u8& source, const image_u8& r
 	double squared_error = 0.0;
 	double weighted_error = 0.0;
 	double total_weight = 0.0;
-	const bool weighted = importance != nullptr && importance->width() == source.width()
-		&& importance->height() == source.height();
+	const bool weighted = importance != nullptr && importance->width() == source.width() &&
+	                      importance->height() == source.height();
 
 	for (size_t i = 0; i < source.size(); ++i)
 	{
@@ -314,14 +314,12 @@ void add_face_importance(image_u8& importance, const rect_i& face, const std::ve
 			{
 				const int dx = x - centre.x;
 				const int dy = y - centre.y;
-				if (dx * dx + dy * dy <= radius * radius)
-					importance(x, y) = std::max<uint8_t>(importance(x, y), 255);
+				if (dx * dx + dy * dy <= radius * radius) importance(x, y) = std::max<uint8_t>(importance(x, y), 255);
 			}
 	}
 }
 
-void transform_codec::reconstruct(const image_u8& source, const image_u8* importance,
-	                              image_u8& reconstructed) const
+void transform_codec::reconstruct(const image_u8& source, const image_u8* importance, image_u8& reconstructed) const
 {
 	std::vector<int16_t> coefficients;
 	std::vector<uint8_t> quantizers;
@@ -330,8 +328,7 @@ void transform_codec::reconstruct(const image_u8& source, const image_u8* import
 }
 
 void transform_codec::encode_coefficients(const image_u8& source, const image_u8* importance,
-	                                      std::vector<int16_t>& coefficients,
-	                                      std::vector<uint8_t>& quantizers) const
+                                          std::vector<int16_t>& coefficients, std::vector<uint8_t>& quantizers) const
 {
 	const int cols = (source.width() + block_size - 1) / block_size;
 	const int rows = (source.height() + block_size - 1) / block_size;
@@ -356,15 +353,17 @@ void transform_codec::encode_coefficients(const image_u8& source, const image_u8
 					const int sx = std::min(block_x + x, source.width() - 1);
 					const int sy = std::min(block_y + y, source.height() - 1);
 					samples[y][x] = static_cast<float>(source(sx, sy)) - 128.0f;
-					importance_sum += importance != nullptr && importance->contains(sx, sy) ? (*importance)(sx, sy) : 32;
+					importance_sum += importance != nullptr && importance->contains(sx, sy) ? (*importance)(sx, sy)
+					                                                                        : 32;
 				}
 
 			// Snapped to a ladder: without it a landmark disc drifting by a pixel re-quantises
 			// blocks whose pixels never moved, and those blocks then have to be re-sent.
-			const float average_importance = std::round(
-				importance_sum / static_cast<float>(block_size * block_size) / 32.0f) * 32.0f;
-			const int quantizer = static_cast<int>(std::lround(
-				34.0f - 26.0f * std::clamp(average_importance / 255.0f, 0.0f, 1.0f)));
+			const float average_importance = std::round(importance_sum / static_cast<float>(block_size * block_size) /
+			                                            32.0f) *
+			                                 32.0f;
+			const int quantizer = static_cast<int>(
+				std::lround(34.0f - 26.0f * std::clamp(average_importance / 255.0f, 0.0f, 1.0f)));
 			const int block_index = block_y / block_size * cols + block_x / block_size;
 			quantizers[block_index] = static_cast<uint8_t>(quantizer);
 
@@ -376,24 +375,24 @@ void transform_codec::encode_coefficients(const image_u8& source, const image_u8
 				for (int u = 0; u < block_size; ++u)
 				{
 					for (int y = 0; y < block_size; ++y) transformed[v][u] += basis[v][y] * horizontal[y][u];
-					const int value = static_cast<int>(std::lround(
-						transformed[v][u] / (quantizer * frequency_scale(u, v))));
-					coefficients[static_cast<size_t>(block_index) * block_coefficients + v * block_size + u]
-						= static_cast<int16_t>(std::clamp(value, -32767, 32767));
+					const int value = static_cast<int>(
+						std::lround(transformed[v][u] / (quantizer * frequency_scale(u, v))));
+					coefficients[static_cast<size_t>(block_index) * block_coefficients + v * block_size + u] =
+						static_cast<int16_t>(std::clamp(value, -32767, 32767));
 				}
 		}
 	}
 }
 
 bool transform_codec::reconstruct_coefficients(const std::vector<int16_t>& coefficients,
-	                                           const std::vector<uint8_t>& quantizers,
-	                                           const int width, const int height,
-	                                           image_u8& reconstructed) const
+                                               const std::vector<uint8_t>& quantizers, const int width,
+                                               const int height, image_u8& reconstructed) const
 {
 	const int cols = (width + block_size - 1) / block_size;
 	const int rows = (height + block_size - 1) / block_size;
-	if (width <= 0 || height <= 0 || quantizers.size() != static_cast<size_t>(cols) * rows
-		|| coefficients.size() != quantizers.size() * block_coefficients) return false;
+	if (width <= 0 || height <= 0 || quantizers.size() != static_cast<size_t>(cols) * rows ||
+	    coefficients.size() != quantizers.size() * block_coefficients)
+		return false;
 
 	const auto& basis = dct().basis;
 
@@ -405,8 +404,9 @@ bool transform_codec::reconstruct_coefficients(const std::vector<int16_t>& coeff
 			float transformed[block_size][block_size];
 			for (int v = 0; v < block_size; ++v)
 				for (int u = 0; u < block_size; ++u)
-					transformed[v][u] = coefficients[static_cast<size_t>(block_index) * block_coefficients
-						+ v * block_size + u] * quantizers[block_index] * frequency_scale(u, v);
+					transformed[v][u] =
+						coefficients[static_cast<size_t>(block_index) * block_coefficients + v * block_size + u] *
+						quantizers[block_index] * frequency_scale(u, v);
 			float vertical[block_size][block_size] = {};
 			for (int y = 0; y < block_size; ++y)
 				for (int u = 0; u < block_size; ++u)
@@ -441,30 +441,30 @@ void temporal_transform_stream::reset()
 }
 
 transform_packet temporal_transform_stream::encode(const transform_codec& codec, const image_u8& source,
-	                                                const image_u8* importance, bool force_keyframe,
-	                                                const size_t max_packet_bytes, const face_geometry& geometry)
+                                                   const image_u8* importance, bool force_keyframe,
+                                                   const size_t max_packet_bytes, const face_geometry& geometry)
 {
 	transform_packet packet;
 	std::vector<int16_t> current_coefficients;
 	std::vector<uint8_t> current_quantizers;
 	codec.encode_coefficients(source, importance, current_coefficients, current_quantizers);
-	force_keyframe = force_keyframe || source.width() != frame_width || source.height() != frame_height
-		|| encoder_coefficients.size() != current_coefficients.size();
+	force_keyframe = force_keyframe || source.width() != frame_width || source.height() != frame_height ||
+	                 encoder_coefficients.size() != current_coefficients.size();
 	const int cols = (source.width() + transform_codec::block_size - 1) / transform_codec::block_size;
 	const int block_count = static_cast<int>(current_quantizers.size());
 	if (force_keyframe || encoder_age.size() != current_quantizers.size())
 		encoder_age.assign(current_quantizers.size(), 0);
 
-	const bool can_predict = !force_keyframe && encoder_reference.width() == source.width()
-		&& encoder_reference.height() == source.height() && !encoder_reference.empty();
+	const bool can_predict = !force_keyframe && encoder_reference.width() == source.width() &&
+	                         encoder_reference.height() == source.height() && !encoder_reference.empty();
 
 	// What the decoder will hold for every block before this packet's records are applied.
 	// Nothing below touches the encoder's own state until the packet is known to be sent: a
 	// packet with no records is never sent, so its warp must not be committed either.
-	std::vector<int16_t> held = force_keyframe
-		? std::vector<int16_t>(current_coefficients.size(), 0) : encoder_coefficients;
-	std::vector<uint8_t> held_quantizers = force_keyframe
-		? std::vector<uint8_t>(current_quantizers.size(), 0) : encoder_quantizers;
+	std::vector<int16_t> held = force_keyframe ? std::vector<int16_t>(current_coefficients.size(), 0)
+	                                           : encoder_coefficients;
+	std::vector<uint8_t> held_quantizers = force_keyframe ? std::vector<uint8_t>(current_quantizers.size(), 0)
+	                                                      : encoder_quantizers;
 
 	// Squared pixel error left in a block if the decoder keeps `levels` for it. The DCT here
 	// is orthonormal, so this sum of squared dequantised coefficient errors is exactly the
@@ -475,9 +475,11 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		double distortion = 0.0;
 		for (int coefficient = 0; coefficient < transform_codec::block_coefficients; ++coefficient)
 		{
-			const double error = (current_coefficients[base + coefficient] * static_cast<double>(current_quantizers[block])
-				- levels[base + coefficient] * static_cast<double>(held_quantizers[block]))
-				* frequency_scale(coefficient % transform_codec::block_size, coefficient / transform_codec::block_size);
+			const double error = (current_coefficients[base + coefficient] *
+			                          static_cast<double>(current_quantizers[block]) -
+			                      levels[base + coefficient] * static_cast<double>(held_quantizers[block])) *
+			                     frequency_scale(coefficient % transform_codec::block_size,
+			                                     coefficient / transform_codec::block_size);
 			distortion += error * error;
 		}
 		return distortion;
@@ -492,8 +494,8 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 	if (can_predict)
 	{
 		std::vector<int16_t> warped = held;
-		const std::vector<int> moved = warp_held_blocks(codec, encoder_reference, held_quantizers,
-			encoder_geometry, geometry, warped);
+		const std::vector<int> moved = warp_held_blocks(codec, encoder_reference, held_quantizers, encoder_geometry,
+		                                                geometry, warped);
 		double still_error = 0.0;
 		double warped_error = 0.0;
 		for (const int block : moved)
@@ -529,9 +531,9 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		// only shrink the record, so a budget reserved from this figure always holds.
 		size_t bytes() const
 		{
-			return 1 + (send_quantizer ? 1u : 0u)
-				+ (motion ? varuint_size(zigzag_encode(vector.x)) + varuint_size(zigzag_encode(vector.y)) : 0u)
-				+ (count > 0 ? varuint_size(static_cast<uint32_t>(count)) + tokens.size() : 0u);
+			return 1 + (send_quantizer ? 1u : 0u) +
+			       (motion ? varuint_size(zigzag_encode(vector.x)) + varuint_size(zigzag_encode(vector.y)) : 0u) +
+			       (count > 0 ? varuint_size(static_cast<uint32_t>(count)) + tokens.size() : 0u);
 		}
 	};
 
@@ -539,7 +541,7 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 	// which is what turns a well predicted block into a two byte "it just moved" record
 	// instead of a page of requantisation noise.
 	const auto code_against = [&](const int block, const int16_t* predictor, const bool send_quantizer,
-		const point_i vector, const bool motion, const double lambda)
+	                              const point_i vector, const bool motion, const double lambda)
 	{
 		const size_t base = static_cast<size_t>(block) * transform_codec::block_coefficients;
 		const double quantizer = current_quantizers[block];
@@ -553,7 +555,7 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		{
 			const int delta = current_coefficients[base + coefficient] - predictor[coefficient];
 			const double scale = quantizer * frequency_scale(coefficient % transform_codec::block_size,
-				coefficient / transform_codec::block_size);
+			                                                 coefficient / transform_codec::block_size);
 			const double gain = delta * scale * (delta * scale);
 			if (delta == 0 || gain <= lambda * token_bytes(delta))
 			{
@@ -598,8 +600,7 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		// Squared pixel error the codec is willing to accept to save one byte. Tied to the
 		// block's own quantiser, so a coarsely coded background is allowed to be sloppier
 		// about its residual than a face is.
-		const double lambda = force_keyframe ? 0.0
-			: rd_lambda * current_quantizers[block] * current_quantizers[block];
+		const double lambda = force_keyframe ? 0.0 : rd_lambda * current_quantizers[block] * current_quantizers[block];
 		const bool send_quantizer = current_quantizers[block] != sent_quantizer;
 		coded_block coded;
 		if (force_keyframe)
@@ -613,8 +614,8 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 			if (can_predict)
 			{
 				const point_i motion = search_motion(source, encoder_reference, block_x, block_y, seed_vector);
-				codec.predict_block(encoder_reference, block_x, block_y, motion.x, motion.y,
-					current_quantizers[block], predicted);
+				codec.predict_block(encoder_reference, block_x, block_y, motion.x, motion.y, current_quantizers[block],
+				                    predicted);
 				coded_block moved = code_against(block, predicted, true, motion, true, lambda);
 
 				// Mode decision by the same rule as everything else: the cheaper way to reach
@@ -640,7 +641,8 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		for (int y = 0; y < transform_codec::block_size && block_y + y < source.height(); ++y)
 			for (int x = 0; x < transform_codec::block_size && block_x + x < source.width(); ++x, ++counted)
 				importance_sum += importance != nullptr && importance->contains(block_x + x, block_y + y)
-					? (*importance)(block_x + x, block_y + y) : 32;
+				                      ? (*importance)(block_x + x, block_y + y)
+				                      : 32;
 
 		// Distortion actually removed per byte spent, tilted towards faces. A block the face
 		// has moved off carries a large error at a low importance, so only a bounded
@@ -675,10 +677,8 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 		used += entry.cost;
 		selected.push_back(&entry);
 	}
-	std::sort(selected.begin(), selected.end(), [](const candidate* a, const candidate* b)
-	{
-		return a->index < b->index;
-	});
+	std::sort(selected.begin(), selected.end(),
+	          [](const candidate* a, const candidate* b) { return a->index < b->index; });
 
 	append_packet_header(packet.bytes, 'T', 3, force_keyframe, source.width(), source.height(), 0);
 	packet.bytes[3] = static_cast<uint8_t>(packet.bytes[3] | (warp ? 2 : 0) | (refuse ? 4 : 0));
@@ -690,11 +690,10 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 	for (const candidate* entry : selected)
 	{
 		const coded_block& coded = entry->coded;
-		const bool inherit = coded.motion && coded.vector.x == previous_vector.x
-			&& coded.vector.y == previous_vector.y;
+		const bool inherit = coded.motion && coded.vector.x == previous_vector.x && coded.vector.y == previous_vector.y;
 		append_varuint(packet.bytes, static_cast<uint32_t>(entry->index - previous_index - 1));
-		packet.bytes.push_back(static_cast<uint8_t>((coded.motion ? 1 : 0) | (coded.send_quantizer ? 2 : 0)
-			| (inherit ? 4 : 0) | (coded.count == 0 ? 8 : 0)));
+		packet.bytes.push_back(static_cast<uint8_t>((coded.motion ? 1 : 0) | (coded.send_quantizer ? 2 : 0) |
+		                                            (inherit ? 4 : 0) | (coded.count == 0 ? 8 : 0)));
 		if (coded.send_quantizer) packet.bytes.push_back(current_quantizers[entry->index]);
 		if (coded.motion && !inherit)
 		{
@@ -739,20 +738,20 @@ transform_packet temporal_transform_stream::encode(const transform_codec& codec,
 	// What the decoder will be holding once this packet lands, and therefore what the next
 	// packet's motion vectors are allowed to point into and its warp starts from.
 	codec.reconstruct_coefficients(encoder_coefficients, encoder_quantizers, frame_width, frame_height,
-		encoder_reference);
+	                               encoder_reference);
 	return packet;
 }
 
-bool temporal_transform_stream::decode(const transform_codec& codec, const transform_packet& packet,
-	                                   const int width, const int height, image_u8& reconstructed,
-	                                   const face_geometry& geometry)
+bool temporal_transform_stream::decode(const transform_codec& codec, const transform_packet& packet, const int width,
+                                       const int height, image_u8& reconstructed, const face_geometry& geometry)
 {
-	if (packet.bytes.size() < 10 || packet.bytes[0] != 'L' || packet.bytes[1] != 'T'
-		|| packet.bytes[2] != 3 || (packet.bytes[3] & ~7u) != 0) return false;
+	if (packet.bytes.size() < 10 || packet.bytes[0] != 'L' || packet.bytes[1] != 'T' || packet.bytes[2] != 3 ||
+	    (packet.bytes[3] & ~7u) != 0)
+		return false;
 	size_t offset = 4;
 	int encoded_width = 0, encoded_height = 0, count = 0;
-	if (!read_u16(packet.bytes, offset, encoded_width) || !read_u16(packet.bytes, offset, encoded_height)
-		|| !read_u16(packet.bytes, offset, count) || encoded_width != width || encoded_height != height)
+	if (!read_u16(packet.bytes, offset, encoded_width) || !read_u16(packet.bytes, offset, encoded_height) ||
+	    !read_u16(packet.bytes, offset, count) || encoded_width != width || encoded_height != height)
 		return false;
 	const int cols = (width + transform_codec::block_size - 1) / transform_codec::block_size;
 	const int rows = (height + transform_codec::block_size - 1) / transform_codec::block_size;
@@ -761,13 +760,16 @@ bool temporal_transform_stream::decode(const transform_codec& codec, const trans
 	const bool warp = (packet.bytes[3] & 2) != 0;
 	const bool refuse = (packet.bytes[3] & 4) != 0;
 	if ((keyframe && (warp || refuse)) || (warp && refuse)) return false;
-	auto next_coefficients = keyframe ? std::vector<int16_t>(static_cast<size_t>(block_count)
-		* transform_codec::block_coefficients, 0) : decoder_coefficients;
+	auto next_coefficients = keyframe ? std::vector<int16_t>(static_cast<size_t>(block_count) *
+	                                                             transform_codec::block_coefficients,
+	                                                         0)
+	                                  : decoder_coefficients;
 	auto next_quantizers = keyframe ? std::vector<uint8_t>(block_count, 0) : decoder_quantizers;
-	if (next_coefficients.size() != static_cast<size_t>(block_count) * transform_codec::block_coefficients
-		|| next_quantizers.size() != static_cast<size_t>(block_count)) return false;
-	const bool can_predict = !keyframe && decoder_reference.width() == width
-		&& decoder_reference.height() == height && !decoder_reference.empty();
+	if (next_coefficients.size() != static_cast<size_t>(block_count) * transform_codec::block_coefficients ||
+	    next_quantizers.size() != static_cast<size_t>(block_count))
+		return false;
+	const bool can_predict = !keyframe && decoder_reference.width() == width && decoder_reference.height() == height &&
+	                         !decoder_reference.empty();
 	if (warp)
 	{
 		if (!can_predict) return false;
@@ -802,22 +804,22 @@ bool temporal_transform_stream::decode(const transform_codec& codec, const trans
 			if ((flags & 4) == 0)
 			{
 				uint32_t encoded_x = 0, encoded_y = 0;
-				if (!read_varuint(packet.bytes, offset, encoded_x)
-					|| !read_varuint(packet.bytes, offset, encoded_y)) return false;
-				previous_vector = {zigzag_decode(encoded_x), zigzag_decode(encoded_y)};
-				if (std::abs(previous_vector.x) > max_motion || std::abs(previous_vector.y) > max_motion)
+				if (!read_varuint(packet.bytes, offset, encoded_x) || !read_varuint(packet.bytes, offset, encoded_y))
 					return false;
+				previous_vector = {zigzag_decode(encoded_x), zigzag_decode(encoded_y)};
+				if (std::abs(previous_vector.x) > max_motion || std::abs(previous_vector.y) > max_motion) return false;
 			}
 			codec.predict_block(decoder_reference, static_cast<int>(block) % cols * transform_codec::block_size,
-				static_cast<int>(block) / cols * transform_codec::block_size,
-				previous_vector.x, previous_vector.y, next_quantizers[block], predicted);
+			                    static_cast<int>(block) / cols * transform_codec::block_size, previous_vector.x,
+			                    previous_vector.y, next_quantizers[block], predicted);
 			for (int coefficient = 0; coefficient < transform_codec::block_coefficients; ++coefficient)
 				next_coefficients[base + coefficient] = predicted[coefficient];
 		}
 
 		uint32_t changed = 0;
-		if ((flags & 8) == 0 && (!read_varuint(packet.bytes, offset, changed)
-			|| changed == 0 || changed > transform_codec::block_coefficients)) return false;
+		if ((flags & 8) == 0 && (!read_varuint(packet.bytes, offset, changed) || changed == 0 ||
+		                         changed > transform_codec::block_coefficients))
+			return false;
 		int position = 0;
 		for (uint32_t token = 0; token < changed; ++token)
 		{
@@ -850,9 +852,8 @@ bool temporal_transform_stream::animate(const face_geometry& geometry, image_u8&
 	return true;
 }
 
-void transform_codec::predict_block(const image_u8& reference, const int block_x, const int block_y,
-	                                const int dx, const int dy, const int quantizer,
-	                                int16_t* coefficients) const
+void transform_codec::predict_block(const image_u8& reference, const int block_x, const int block_y, const int dx,
+                                    const int dy, const int quantizer, int16_t* coefficients) const
 {
 	const auto& basis = dct().basis;
 	float samples[block_size][block_size];
@@ -875,8 +876,7 @@ void transform_codec::predict_block(const image_u8& reference, const int block_x
 		for (int u = 0; u < block_size; ++u)
 		{
 			for (int y = 0; y < block_size; ++y) transformed[v][u] += basis[v][y] * horizontal[y][u];
-			const int value = static_cast<int>(std::lround(
-				transformed[v][u] / (quantizer * frequency_scale(u, v))));
+			const int value = static_cast<int>(std::lround(transformed[v][u] / (quantizer * frequency_scale(u, v))));
 			coefficients[v * block_size + u] = static_cast<int16_t>(std::clamp(value, -32767, 32767));
 		}
 }

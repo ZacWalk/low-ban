@@ -115,4 +115,4 @@ struct landmark_error
 };
 
 bool compare_landmarks(const std::vector<point_i>& reference, const std::vector<point_i>& measured,
-	landmark_error& error);
+                       landmark_error& error);

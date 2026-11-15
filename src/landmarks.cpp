@@ -21,9 +21,7 @@ namespace
 		const uint8_t* end;
 
 	public:
-		model_reader(const uint8_t* data, const size_t len) : cursor(data), end(data + len)
-		{
-		}
+		model_reader(const uint8_t* data, const size_t len) : cursor(data), end(data + len) {}
 
 		int64_t read_int()
 		{
@@ -448,8 +446,7 @@ namespace
 			value >>= 7;
 			if (value != 0) byte |= 0x80;
 			bytes.push_back(byte);
-		}
-		while (value != 0);
+		} while (value != 0);
 	}
 
 	bool wire_read_varuint(const std::vector<uint8_t>& bytes, size_t& offset, uint32_t& value)
@@ -490,8 +487,7 @@ namespace
 		if (!same_shape(a, b)) return false;
 		for (size_t face = 0; face < a.size(); ++face)
 			for (size_t point = 0; point < a[face].size(); ++point)
-				if (a[face][point].x != b[face][point].x || a[face][point].y != b[face][point].y)
-					return false;
+				if (a[face][point].x != b[face][point].x || a[face][point].y != b[face][point].y) return false;
 		return true;
 	}
 
@@ -500,7 +496,7 @@ namespace
 	// point holding its x and y residual from the shift as nibbles, -7..7, with 15 escaping to
 	// a variable-length value after the nibbles. Unlisted points move by the shift alone.
 	std::vector<uint8_t> face_delta(const std::vector<point_i>& previous, const std::vector<point_i>& next,
-		const point_i shift, const bool sparse)
+	                                const point_i shift, const bool sparse)
 	{
 		std::vector<uint8_t> bytes;
 		const bool shifted = shift.x != 0 || shift.y != 0;
@@ -525,7 +521,8 @@ namespace
 			uint8_t nibbles[2] = {};
 			for (int axis = 0; axis < 2; ++axis)
 			{
-				if (residual[axis] >= -7 && residual[axis] <= 7) nibbles[axis] = static_cast<uint8_t>(residual[axis] + 7);
+				if (residual[axis] >= -7 && residual[axis] <= 7)
+					nibbles[axis] = static_cast<uint8_t>(residual[axis] + 7);
 				else
 				{
 					nibbles[axis] = 15;
@@ -589,7 +586,7 @@ landmark_packet temporal_landmark_stream::encode(const face_geometry& faces, boo
 	force_keyframe = force_keyframe || !same_shape(quantized, encoder_points);
 	if (!force_keyframe && same_points(quantized, encoder_points)) return packet;
 	packet.bytes = {'L', 'M', 2, static_cast<uint8_t>(force_keyframe ? 1 : 0),
-		static_cast<uint8_t>(std::min<size_t>(quantized.size(), 255))};
+	                static_cast<uint8_t>(std::min<size_t>(quantized.size(), 255))};
 	packet.keyframe = force_keyframe;
 
 	if (force_keyframe)
@@ -638,8 +635,9 @@ landmark_packet temporal_landmark_stream::encode(const face_geometry& faces, boo
 
 bool temporal_landmark_stream::decode(const landmark_packet& packet, face_geometry& faces)
 {
-	if (packet.bytes.size() < 5 || packet.bytes[0] != 'L' || packet.bytes[1] != 'M'
-		|| packet.bytes[2] != 2 || (packet.bytes[3] & ~1u) != 0) return false;
+	if (packet.bytes.size() < 5 || packet.bytes[0] != 'L' || packet.bytes[1] != 'M' || packet.bytes[2] != 2 ||
+	    (packet.bytes[3] & ~1u) != 0)
+		return false;
 	const bool keyframe = (packet.bytes[3] & 1) != 0;
 	const size_t face_count = packet.bytes[4];
 	size_t offset = 5;
@@ -679,7 +677,8 @@ bool temporal_landmark_stream::decode(const landmark_packet& packet, face_geomet
 			{
 				uint32_t shift_x = 0;
 				uint32_t shift_y = 0;
-				if (!wire_read_varuint(packet.bytes, offset, shift_x) || !wire_read_varuint(packet.bytes, offset, shift_y))
+				if (!wire_read_varuint(packet.bytes, offset, shift_x) ||
+				    !wire_read_varuint(packet.bytes, offset, shift_y))
 					return false;
 				shift = {wire_zigzag_decode(shift_x), wire_zigzag_decode(shift_y)};
 			}
@@ -756,8 +755,7 @@ void landmark_filter::reset()
 face_geometry landmark_filter::apply(const face_geometry& faces, const double seconds)
 {
 	bool fresh = state.size() != faces.size();
-	for (size_t face = 0; !fresh && face < faces.size(); ++face)
-		fresh = state[face].size() != faces[face].size() * 2;
+	for (size_t face = 0; !fresh && face < faces.size(); ++face) fresh = state[face].size() != faces[face].size() * 2;
 
 	face_geometry smoothed = faces;
 	const double elapsed = seconds - previous_seconds;
@@ -798,12 +796,12 @@ face_geometry landmark_filter::apply(const face_geometry& faces, const double se
 }
 
 bool compare_landmarks(const std::vector<point_i>& reference, const std::vector<point_i>& measured,
-	landmark_error& error)
+                       landmark_error& error)
 {
 	error = {};
 	if (reference.size() != 68 || measured.size() != 68) return false;
 	const double ocular = std::hypot(static_cast<double>(reference[45].x - reference[36].x),
-		static_cast<double>(reference[45].y - reference[36].y));
+	                                 static_cast<double>(reference[45].y - reference[36].y));
 	if (ocular < 1.0) return false;
 
 	double overall = 0.0;
@@ -811,7 +809,7 @@ bool compare_landmarks(const std::vector<point_i>& reference, const std::vector<
 	for (size_t i = 0; i < reference.size(); ++i)
 	{
 		const double distance = std::hypot(static_cast<double>(measured[i].x - reference[i].x),
-			static_cast<double>(measured[i].y - reference[i].y));
+		                                   static_cast<double>(measured[i].y - reference[i].y));
 		overall += distance;
 		if (i >= 48) mouth += distance;
 	}

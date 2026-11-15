@@ -21,10 +21,13 @@
 namespace
 {
 	int failures = 0;
+	int checks = 0;
+	int skipped = 0;
 	constexpr double pi = 3.14159265358979323846;
 
 	void check(const bool condition, const char* description)
 	{
+		++checks;
 		if (!condition) ++failures;
 		std::printf("  [%s] %s\n", condition ? "pass" : "FAIL", description);
 	}
@@ -33,12 +36,13 @@ namespace
 	// Foundation's H.264 transforms on a server without the media feature.
 	void skip(const char* description, const std::string& reason)
 	{
+		++skipped;
 		std::printf("  [skip] %s: %s\n", description, reason.c_str());
 	}
 
 	// A frame with a skin coloured ellipse on a neutral grey background.
-	video_frame make_face_frame(const int width, const int height, const int cx, const int cy,
-	                            const int rx, const int ry)
+	video_frame make_face_frame(const int width, const int height, const int cx, const int cy, const int rx,
+	                            const int ry)
 	{
 		video_frame frame;
 		frame.luma.resize(width, height);
@@ -116,8 +120,8 @@ namespace
 		for (int y = 0; y < height; ++y)
 			for (int x = 0; x < width; ++x)
 			{
-				const double value = 128.0 + 50.0 * std::sin(x * 0.21) * std::cos(y * 0.17)
-					+ 30.0 * std::sin((x + 2 * y) * 0.07) + (x * 7 + y * 13) % 17 - 8;
+				const double value = 128.0 + 50.0 * std::sin(x * 0.21) * std::cos(y * 0.17) +
+				                     30.0 * std::sin((x + 2 * y) * 0.07) + (x * 7 + y * 13) % 17 - 8;
 				img(x, y) = static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(value)), 0, 255));
 			}
 		return img;
@@ -141,7 +145,8 @@ namespace
 
 	bool same_image(const image_u8& a, const image_u8& b)
 	{
-		return a.width() == b.width() && a.height() == b.height() && std::equal(a.data(), a.data() + a.size(), b.data());
+		return a.width() == b.width() && a.height() == b.height() &&
+		       std::equal(a.data(), a.data() + a.size(), b.data());
 	}
 
 	void test_image_ops()
@@ -150,8 +155,7 @@ namespace
 
 		image_u8 src(64, 64);
 		for (int y = 0; y < 64; ++y)
-			for (int x = 0; x < 64; ++x)
-				src(x, y) = static_cast<uint8_t>(x < 32 ? 40 : 200);
+			for (int x = 0; x < 64; ++x) src(x, y) = static_cast<uint8_t>(x < 32 ? 40 : 200);
 
 		image_u8 small(16, 16);
 		resize_bilinear(src, small);
@@ -196,7 +200,8 @@ namespace
 
 		video_frame frame;
 		check(decode_yuy2(frame, buffer.data(), buffer.size(), width, height, stride), "top-down decode succeeds");
-		check(frame.luma(3, 2) == 23 && frame.cb(1, 2) == 100 && frame.cr(1, 2) == 200, "planes carry the right values");
+		check(frame.luma(3, 2) == 23 && frame.cb(1, 2) == 100 && frame.cr(1, 2) == 200,
+		      "planes carry the right values");
 
 		video_frame flipped;
 		check(decode_yuy2(flipped, buffer.data(), buffer.size(), width, height, -stride), "bottom-up decode succeeds");
@@ -215,7 +220,8 @@ namespace
 		constexpr int plane_rows = height + 2;
 		std::vector<uint8_t> nv12(static_cast<size_t>(nv12_stride) * (plane_rows + height / 2), 0);
 		for (int y = 0; y < height; ++y)
-			for (int x = 0; x < width; ++x) nv12[static_cast<size_t>(y) * nv12_stride + x] = static_cast<uint8_t>(y * 10 + x);
+			for (int x = 0; x < width; ++x)
+				nv12[static_cast<size_t>(y) * nv12_stride + x] = static_cast<uint8_t>(y * 10 + x);
 		for (int y = 0; y < height / 2; ++y)
 			for (int x = 0; x < width / 2; ++x)
 			{
@@ -223,8 +229,8 @@ namespace
 				nv12[static_cast<size_t>(plane_rows + y) * nv12_stride + x * 2 + 1] = static_cast<uint8_t>(190 + y);
 			}
 		video_frame from_nv12;
-		check(decode_nv12(from_nv12, nv12.data(), nv12.size(), width, height, nv12_stride, plane_rows)
-			&& from_nv12.luma(5, 3) == 35 && from_nv12.cb(1, 3) == 61 && from_nv12.cr(1, 0) == 190,
+		check(decode_nv12(from_nv12, nv12.data(), nv12.size(), width, height, nv12_stride, plane_rows) &&
+		          from_nv12.luma(5, 3) == 35 && from_nv12.cb(1, 3) == 61 && from_nv12.cr(1, 0) == 190,
 		      "NV12 decodes into the same planes, chroma rows repeated");
 		check(!decode_nv12(from_nv12, nv12.data(), nv12.size() - 1, width, height, nv12_stride, plane_rows),
 		      "short NV12 buffers are rejected");
@@ -263,9 +269,8 @@ namespace
 				const int local_x = x % 20;
 				const int local_y = y % 20;
 				const int block = x / 20 + y / 20;
-				const double value = 40 + block % 5 * 25 + local_x * (block % 3 + 1)
-					+ local_y * ((block + 1) % 3 + 1)
-					+ 30.0 * std::sin(local_x * 0.7 + block) * std::sin(local_y * 0.5);
+				const double value = 40 + block % 5 * 25 + local_x * (block % 3 + 1) + local_y * ((block + 1) % 3 + 1) +
+				                     30.0 * std::sin(local_x * 0.7 + block) * std::sin(local_y * 0.5);
 				frame(x, y) = static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(value)), 0, 255));
 			}
 
@@ -283,31 +288,32 @@ namespace
 		const reconstruction_quality quality = measure_quality(frame, traditional_output, &importance);
 		check(quality.rmse > 0.0 && quality.psnr > 10.0, "transform quality is measurable and usable");
 		temporal_transform_stream transform_stream;
-		const transform_packet transform_keyframe = transform_stream.encode(
-			traditional, frame, &importance, true, 0);
+		const transform_packet transform_keyframe = transform_stream.encode(traditional, frame, &importance, true, 0);
 		image_u8 transform_decoded;
 		check(transform_keyframe.keyframe && transform_keyframe.updated_blocks == 20 * 15,
 		      "transform keyframe contains every block");
 		check(transform_stream.decode(traditional, transform_keyframe, frame.width(), frame.height(),
-			transform_decoded), "transform keyframe decodes successfully");
-		check(same_image(transform_decoded, traditional_output), "serialized transform keyframe matches direct reconstruction");
+		                              transform_decoded),
+		      "transform keyframe decodes successfully");
+		check(same_image(transform_decoded, traditional_output),
+		      "serialized transform keyframe matches direct reconstruction");
 
 		image_u8 transform_next = frame;
 		for (int y = 0; y < transform_next.height(); ++y)
 			for (int x = 0; x < transform_next.width(); ++x)
 				transform_next(x, y) = static_cast<uint8_t>(255 - transform_next(x, y));
-		const transform_packet transform_delta = transform_stream.encode(
-			traditional, transform_next, &importance, false, 256);
+		const transform_packet transform_delta = transform_stream.encode(traditional, transform_next, &importance,
+		                                                                 false, 256);
 		check(!transform_delta.keyframe && !transform_delta.bytes.empty() && transform_delta.bytes.size() <= 256,
 		      "transform delta obeys its byte budget");
 		check(transform_delta.updated_blocks > 0 && transform_delta.updated_blocks < 20 * 15,
 		      "transform delta updates a subset of blocks");
-		check(transform_stream.decode(traditional, transform_delta, frame.width(), frame.height(),
-			transform_decoded), "transform delta applies to decoder state");
+		check(transform_stream.decode(traditional, transform_delta, frame.width(), frame.height(), transform_decoded),
+		      "transform delta applies to decoder state");
 		transform_packet bad_transform = transform_delta;
 		bad_transform.bytes.pop_back();
-		check(!transform_stream.decode(traditional, bad_transform, frame.width(), frame.height(),
-			transform_decoded), "truncated transform packets are rejected");
+		check(!transform_stream.decode(traditional, bad_transform, frame.width(), frame.height(), transform_decoded),
+		      "truncated transform packets are rejected");
 
 		// A flat mid-grey block quantises to nothing at all, so there is no error to remove
 		// and a purely error-driven encoder would leave it out of a "complete" keyframe.
@@ -318,8 +324,7 @@ namespace
 			image_u8 flat_decoded;
 			const transform_packet flat_keyframe = flat_stream.encode(traditional, flat, nullptr, true, 0);
 			bool flat_exact = flat_stream.decode(traditional, flat_keyframe, 64, 64, flat_decoded);
-			for (size_t i = 0; flat_exact && i < flat_decoded.size(); ++i)
-				flat_exact = flat_decoded.data()[i] == 128;
+			for (size_t i = 0; flat_exact && i < flat_decoded.size(); ++i) flat_exact = flat_decoded.data()[i] == 128;
 			check(flat_keyframe.keyframe && flat_keyframe.updated_blocks == 8 * 8,
 			      "a featureless keyframe still carries every block");
 			check(flat_exact, "a featureless keyframe reconstructs exactly");
@@ -330,21 +335,23 @@ namespace
 		{
 			temporal_transform_stream settle_stream;
 			image_u8 settle_decoded;
-			bool settle_decodes = settle_stream.decode(traditional, settle_stream.encode(
-				traditional, frame, &importance, true, 0), frame.width(), frame.height(), settle_decoded);
-			settle_decodes = settle_decodes && settle_stream.decode(traditional, settle_stream.encode(
-				traditional, transform_next, &importance, false, 256), frame.width(), frame.height(),
-				settle_decoded);
+			bool settle_decodes = settle_stream.decode(traditional,
+			                                           settle_stream.encode(traditional, frame, &importance, true, 0),
+			                                           frame.width(), frame.height(), settle_decoded);
+			settle_decodes = settle_decodes && settle_stream.decode(traditional,
+			                                                        settle_stream.encode(traditional, transform_next,
+			                                                                             &importance, false, 256),
+			                                                        frame.width(), frame.height(), settle_decoded);
 
 			int settle_packets = 0;
 			for (int step = 0; step < 12; ++step)
 			{
-				const transform_packet settle = settle_stream.encode(
-					traditional, transform_next, &importance, false, 1200);
+				const transform_packet settle = settle_stream.encode(traditional, transform_next, &importance, false,
+				                                                     1200);
 				if (settle.bytes.empty()) break;
 				++settle_packets;
-				settle_decodes = settle_decodes && settle_stream.decode(traditional, settle,
-					frame.width(), frame.height(), settle_decoded);
+				settle_decodes = settle_decodes && settle_stream.decode(traditional, settle, frame.width(),
+				                                                        frame.height(), settle_decoded);
 			}
 			std::printf("  a held scene settles after %d further packets\n", settle_packets);
 			check(settle_decodes, "held scene decodes throughout");
@@ -374,16 +381,18 @@ namespace
 			image_u8 ghost_decoded;
 
 			paint(moving, moving_importance, 16, 0);
-			bool ghost_decodes = ghost_stream.decode(traditional, ghost_stream.encode(
-				traditional, moving, &moving_importance, true, 0), 160, 120, ghost_decoded);
+			bool ghost_decodes = ghost_stream.decode(traditional,
+			                                         ghost_stream.encode(traditional, moving, &moving_importance, true,
+			                                                             0),
+			                                         160, 120, ghost_decoded);
 
 			for (int step = 0; step < 16; ++step)
 			{
 				paint(moving, moving_importance, 96, step + 1);
-				const transform_packet ghost_packet = ghost_stream.encode(
-					traditional, moving, &moving_importance, false, 1200);
-				ghost_decodes = ghost_decodes && ghost_packet.bytes.size() <= 1200
-					&& ghost_stream.decode(traditional, ghost_packet, 160, 120, ghost_decoded);
+				const transform_packet ghost_packet = ghost_stream.encode(traditional, moving, &moving_importance,
+				                                                          false, 1200);
+				ghost_decodes = ghost_decodes && ghost_packet.bytes.size() <= 1200 &&
+				                ghost_stream.decode(traditional, ghost_packet, 160, 120, ghost_decoded);
 			}
 
 			double vacated_error = 0.0;
@@ -412,36 +421,37 @@ namespace
 			const auto paint_at = [&](const int shift)
 			{
 				for (int y = 0; y < panning.height(); ++y)
-					for (int x = 0; x < panning.width(); ++x)
-						panning(x, y) = static_cast<uint8_t>(60 + x / 8 + y / 8);
+					for (int x = 0; x < panning.width(); ++x) panning(x, y) = static_cast<uint8_t>(60 + x / 8 + y / 8);
 				for (int y = 0; y < 64; ++y)
 					for (int x = 0; x < 64; ++x)
 					{
-						const double value = 128.0 + 90.0 * std::sin(x * 0.31) * std::cos(y * 0.27)
-							+ 30.0 * std::sin((x + y) * 0.9);
+						const double value = 128.0 + 90.0 * std::sin(x * 0.31) * std::cos(y * 0.27) +
+						                     30.0 * std::sin((x + y) * 0.9);
 						panning(40 + shift + x, 60 + shift + y) = static_cast<uint8_t>(
 							std::clamp(static_cast<int>(std::lround(value)), 0, 255));
 					}
 			};
 
 			paint_at(0);
-			bool panning_decodes = panning_stream.decode(traditional, panning_stream.encode(
-				traditional, panning, &panning_importance, true, 0), 320, 240, panning_decoded);
+			bool panning_decodes = panning_stream.decode(traditional,
+			                                             panning_stream.encode(traditional, panning,
+			                                                                   &panning_importance, true, 0),
+			                                             320, 240, panning_decoded);
 
 			int64_t panning_bytes = 0;
 			for (int step = 1; step <= 10; ++step)
 			{
 				paint_at(step * 3);
-				const transform_packet panning_packet = panning_stream.encode(
-					traditional, panning, &panning_importance, false, 600);
+				const transform_packet panning_packet = panning_stream.encode(traditional, panning, &panning_importance,
+				                                                              false, 600);
 				panning_bytes += static_cast<int64_t>(panning_packet.bytes.size());
-				panning_decodes = panning_decodes && panning_packet.bytes.size() <= 600
-					&& panning_stream.decode(traditional, panning_packet, 320, 240, panning_decoded);
+				panning_decodes = panning_decodes && panning_packet.bytes.size() <= 600 &&
+				                  panning_stream.decode(traditional, panning_packet, 320, 240, panning_decoded);
 			}
 
 			const reconstruction_quality panning_quality = measure_quality(panning, panning_decoded);
-			std::printf("  moving subject holds %.1f dB on %lld delta bytes over 10 packets\n",
-				panning_quality.psnr, static_cast<long long>(panning_bytes));
+			std::printf("  moving subject holds %.1f dB on %lld delta bytes over 10 packets\n", panning_quality.psnr,
+			            static_cast<long long>(panning_bytes));
 			check(panning_decodes, "moving subject stays inside its budget and decodes");
 			check(panning_quality.psnr > 28.5, "a translating subject survives a capped delta wire");
 		}
@@ -454,18 +464,20 @@ namespace
 			for (int x = 0; x < startup_frame.width(); ++x)
 				startup_frame(x, y) = static_cast<uint8_t>((x * 3 + y * 5) & 0xff);
 		temporal_transform_stream startup_stream;
-		const transform_packet startup_keyframe = startup_stream.encode(
-			traditional, startup_frame, &startup_importance, true, 0);
+		const transform_packet startup_keyframe = startup_stream.encode(traditional, startup_frame, &startup_importance,
+		                                                                true, 0);
 		image_u8 startup_decoded;
 		image_u8 startup_direct;
 		traditional.reconstruct(startup_frame, &startup_importance, startup_direct);
 		check(startup_keyframe.keyframe && startup_keyframe.updated_blocks == 40 * 30,
 		      "startup keyframe contains the whole coded scene");
 		check(startup_stream.decode(traditional, startup_keyframe, startup_frame.width(), startup_frame.height(),
-			startup_decoded) && same_image(startup_decoded, startup_direct),
+		                            startup_decoded) &&
+		          same_image(startup_decoded, startup_direct),
 		      "startup keyframe reconstructs the whole scene exactly");
 
-		const double budget_kbit = (picture_packet_budget / picture_interval_seconds + 80.0 * geometry_hz) * 8.0 / 1000.0;
+		const double budget_kbit = (picture_packet_budget / picture_interval_seconds + 80.0 * geometry_hz) * 8.0 /
+		                           1000.0;
 		std::printf("  one-face low-ban budget %.1f kbit/s\n", budget_kbit);
 		check(budget_kbit < 80.0, "low-ban's post-startup budget for one face stays below 80 kbit/s");
 
@@ -497,7 +509,8 @@ namespace
 			positive = positive && area > 0;
 			square_area += area;
 		}
-		check(halves.size() == 2 && positive && square_area == 200, "a square triangulates into two positive triangles");
+		check(halves.size() == 2 && positive && square_area == 200,
+		      "a square triangulates into two positive triangles");
 
 		std::vector<point_i> grid;
 		for (int y = 0; y < 5; ++y)
@@ -578,8 +591,8 @@ namespace
 			temporal_transform_stream stream;
 			const face_geometry start = with_geometry ? geometry_at(0) : face_geometry{};
 			image_u8 decoded;
-			result.decodes = stream.decode(codec, stream.encode(codec, frame_at(0), nullptr, true, 0, start),
-				320, 240, decoded, start);
+			result.decodes = stream.decode(codec, stream.encode(codec, frame_at(0), nullptr, true, 0, start), 320, 240,
+			                               decoded, start);
 			result.startup_psnr = measure_quality(frame_at(0), decoded).psnr;
 			image_u8 source;
 			face_geometry geometry;
@@ -590,8 +603,8 @@ namespace
 				const transform_packet packet = stream.encode(codec, source, nullptr, false, 1200, geometry);
 				result.bytes += static_cast<int64_t>(packet.bytes.size());
 				if (packet.warped) ++result.warped;
-				result.decodes = result.decodes && packet.bytes.size() <= 1200
-					&& (packet.bytes.empty() || stream.decode(codec, packet, 320, 240, decoded, geometry));
+				result.decodes = result.decodes && packet.bytes.size() <= 1200 &&
+				                 (packet.bytes.empty() || stream.decode(codec, packet, 320, 240, decoded, geometry));
 			}
 			image_u8 shown;
 			stream.animate(geometry, shown);
@@ -602,8 +615,8 @@ namespace
 		const outcome warped = run(true, false);
 		const outcome plain = run(false, false);
 		std::printf("  with geometry %lld bytes at %.1f dB, without %lld bytes at %.1f dB\n",
-			static_cast<long long>(warped.bytes), warped.quality.psnr, static_cast<long long>(plain.bytes),
-			plain.quality.psnr);
+		            static_cast<long long>(warped.bytes), warped.quality.psnr, static_cast<long long>(plain.bytes),
+		            plain.quality.psnr);
 		check(warped.decodes && plain.decodes, "both streams stay inside their budget and decode");
 		check(warped.warped > 0, "moving geometry is committed as a warp");
 		check(warped.bytes < plain.bytes && warped.quality.psnr + 0.25 > plain.quality.psnr,
@@ -612,13 +625,13 @@ namespace
 		// Geometry that moves over a still picture is wrong. The encoder refuses it once, in a
 		// bare header, and the receiver goes back to showing the picture it holds.
 		const outcome misled = run(true, true);
-		check(misled.decodes && misled.warped == 0 && misled.bytes <= 10
-			&& misled.quality.psnr == misled.startup_psnr, "geometry that defies the picture is refused for a header");
+		check(misled.decodes && misled.warped == 0 && misled.bytes <= 10 && misled.quality.psnr == misled.startup_psnr,
+		      "geometry that defies the picture is refused for a header");
 
 		temporal_transform_stream stream;
 		image_u8 decoded;
 		stream.decode(codec, stream.encode(codec, frame_at(0), nullptr, true, 0, geometry_at(0)), 320, 240, decoded,
-			geometry_at(0));
+		              geometry_at(0));
 		image_u8 shown;
 		int animated = 0;
 		const bool animates = stream.animate(geometry_at(3), shown);
@@ -632,8 +645,8 @@ namespace
 		// decodes to exactly what a decoder that never saw the bad one produces.
 		const auto delta_after_keyframe = [&](temporal_transform_stream& target, image_u8& picture)
 		{
-			target.decode(codec, target.encode(codec, frame_at(0), nullptr, true, 0, geometry_at(0)), 320, 240,
-				picture, geometry_at(0));
+			target.decode(codec, target.encode(codec, frame_at(0), nullptr, true, 0, geometry_at(0)), 320, 240, picture,
+			              geometry_at(0));
 			return target.encode(codec, frame_at(2), nullptr, false, 1200, geometry_at(2));
 		};
 		temporal_transform_stream damaged_stream;
@@ -648,13 +661,15 @@ namespace
 		unknown_flag.bytes[3] = static_cast<uint8_t>(unknown_flag.bytes[3] | 8);
 		transform_packet contradictory = damaged_delta;
 		contradictory.bytes[3] = static_cast<uint8_t>(contradictory.bytes[3] | 4);
-		check(damaged_delta.warped && !damaged_stream.decode(codec, truncated, 320, 240, damaged_picture, geometry_at(2))
-			&& !damaged_stream.decode(codec, unknown_flag, 320, 240, damaged_picture, geometry_at(2))
-			&& !damaged_stream.decode(codec, contradictory, 320, 240, damaged_picture, geometry_at(2)),
+		check(damaged_delta.warped &&
+		          !damaged_stream.decode(codec, truncated, 320, 240, damaged_picture, geometry_at(2)) &&
+		          !damaged_stream.decode(codec, unknown_flag, 320, 240, damaged_picture, geometry_at(2)) &&
+		          !damaged_stream.decode(codec, contradictory, 320, 240, damaged_picture, geometry_at(2)),
 		      "truncated, unknown or contradictory warp packets are rejected");
-		check(damaged_stream.decode(codec, damaged_delta, 320, 240, damaged_picture, geometry_at(2))
-			&& clean_stream.decode(codec, clean_delta, 320, 240, clean_picture, geometry_at(2))
-			&& same_image(damaged_picture, clean_picture), "a rejected warp leaves decoder state untouched");
+		check(damaged_stream.decode(codec, damaged_delta, 320, 240, damaged_picture, geometry_at(2)) &&
+		          clean_stream.decode(codec, clean_delta, 320, 240, clean_picture, geometry_at(2)) &&
+		          same_image(damaged_picture, clean_picture),
+		      "a rejected warp leaves decoder state untouched");
 
 		temporal_transform_stream key_stream;
 		transform_packet warped_keyframe = key_stream.encode(codec, frame_at(0), nullptr, true, 0, geometry_at(0));
@@ -677,8 +692,9 @@ namespace
 		bool quantized_close = wire_decoded.size() == 1 && wire_decoded[0].size() == 68;
 		if (quantized_close)
 			for (size_t i = 0; i < 68; ++i)
-				if (std::abs(wire_decoded[0][i].x - wire_faces[0][i].x) > 1
-					|| std::abs(wire_decoded[0][i].y - wire_faces[0][i].y) > 1) quantized_close = false;
+				if (std::abs(wire_decoded[0][i].x - wire_faces[0][i].x) > 1 ||
+				    std::abs(wire_decoded[0][i].y - wire_faces[0][i].y) > 1)
+					quantized_close = false;
 		check(quantized_close, "landmark quantization stays within one pixel");
 
 		auto moved_faces = wire_faces;
@@ -688,8 +704,8 @@ namespace
 			moved_faces[0][i].y += static_cast<int>((i + 1) % 3) * 2 - 2;
 		}
 		const landmark_packet landmark_delta = wire.encode(moved_faces, false);
-		check(!landmark_delta.keyframe && landmark_delta.bytes.size() <= 80
-			&& landmark_delta.bytes.size() < landmark_keyframe.bytes.size(),
+		check(!landmark_delta.keyframe && landmark_delta.bytes.size() <= 80 &&
+		          landmark_delta.bytes.size() < landmark_keyframe.bytes.size(),
 		      "small landmark motion packs below 80 bytes");
 		check(wire.decode(landmark_delta, wire_decoded), "landmark delta applies to decoder state");
 		check(wire.encode(moved_faces, false).bytes.empty(), "unchanged landmarks emit no packet");
@@ -706,7 +722,8 @@ namespace
 			p.y -= 6;
 		}
 		const landmark_packet shift_packet = wire.encode(shifted, false);
-		check(shift_packet.bytes.size() <= 20 && wire.decode(shift_packet, wire_decoded) && wire_decoded == wire.transmitted(),
+		check(shift_packet.bytes.size() <= 20 && wire.decode(shift_packet, wire_decoded) &&
+		          wire_decoded == wire.transmitted(),
 		      "a rigid head movement costs a shift, not a byte per point");
 
 		auto twitch = shifted;
@@ -720,8 +737,9 @@ namespace
 		auto jump = twitch;
 		jump[0][8].y += 60;
 		const landmark_packet jump_packet = wire.encode(jump, false);
-		check(wire.decode(jump_packet, wire_decoded) && wire_decoded[0][8].y == jump[0][8].y / 2 * 2
-			&& wire_decoded == wire.transmitted(), "large motion escapes and still decodes exactly");
+		check(wire.decode(jump_packet, wire_decoded) && wire_decoded[0][8].y == jump[0][8].y / 2 * 2 &&
+		          wire_decoded == wire.transmitted(),
+		      "large motion escapes and still decodes exactly");
 
 		auto next = jump;
 		next[0][0].x += 2;
@@ -732,8 +750,9 @@ namespace
 		face_geometry two_faces = {wire_faces[0], moved_faces[0]};
 		temporal_landmark_stream pair;
 		face_geometry pair_decoded;
-		check(pair.decode(pair.encode(two_faces, true), pair_decoded) && pair_decoded == pair.transmitted()
-			&& pair_decoded.size() == 2, "several faces round trip");
+		check(pair.decode(pair.encode(two_faces, true), pair_decoded) && pair_decoded == pair.transmitted() &&
+		          pair_decoded.size() == 2,
+		      "several faces round trip");
 	}
 
 	void test_landmark_filter()
@@ -784,9 +803,10 @@ namespace
 			p.y += 4;
 		}
 		const double ocular = std::hypot(static_cast<double>(still[0][45].x - still[0][36].x),
-			static_cast<double>(still[0][45].y - still[0][36].y));
-		check(compare_landmarks(still[0], offset, error) && std::fabs(error.overall - 5.0 / ocular) < 1e-9
-			&& std::fabs(error.mouth - 5.0 / ocular) < 1e-9, "landmark error is normalised by the eye corners");
+		                                 static_cast<double>(still[0][45].y - still[0][36].y));
+		check(compare_landmarks(still[0], offset, error) && std::fabs(error.overall - 5.0 / ocular) < 1e-9 &&
+		          std::fabs(error.mouth - 5.0 / ocular) < 1e-9,
+		      "landmark error is normalised by the eye corners");
 		check(!compare_landmarks(still[0], {}, error), "a missing face cannot be scored");
 	}
 
@@ -830,12 +850,12 @@ namespace
 		{
 			warp_faces(scene, {rest}, {synthetic_face(160 + i, 120, 120, i % 10)}, frame);
 			std::vector<uint8_t> bytes;
-			round_trips = round_trips && wire.encode(frame, {rect_i::from_size(100 + i, 60, 120, 120)}, bytes, error)
-				&& !bytes.empty() && wire.decode(bytes, picture, error);
+			round_trips = round_trips && wire.encode(frame, {rect_i::from_size(100 + i, 60, 120, 120)}, bytes, error) &&
+			              !bytes.empty() && wire.decode(bytes, picture, error);
 			const std::vector<int> types = unit_types(bytes);
 			if (i == 0) first_has_parameter_sets = std::count(types.begin(), types.end(), 7) > 0;
-			only_needed_units = only_needed_units && std::count(types.begin(), types.end(), 6) == 0
-				&& std::count(types.begin(), types.end(), 9) == 0;
+			only_needed_units = only_needed_units && std::count(types.begin(), types.end(), 6) == 0 &&
+			                    std::count(types.begin(), types.end(), 9) == 0;
 			if (i > 0) bytes_after_first += static_cast<int64_t>(bytes.size());
 		}
 		const double rate = bytes_after_first * 8.0 / (44.0 / geometry_hz) / 1000.0;
@@ -868,8 +888,8 @@ namespace
 			fixed.face_offset = offset;
 			h264_wire one;
 			std::vector<uint8_t> bytes;
-			const bool ok = one.open(fixed, error) && one.encode(scene, {box}, bytes, error)
-				&& one.decode(bytes, decoded, error) && !decoded.empty();
+			const bool ok = one.open(fixed, error) && one.encode(scene, {box}, bytes, error) &&
+			                one.decode(bytes, decoded, error) && !decoded.empty();
 			size = bytes.size();
 			return ok && (offset == 0 || one.face_offset_active());
 		};
@@ -883,7 +903,7 @@ namespace
 			return;
 		}
 		std::printf("  face box error %.1f without the offset, %.1f with it\n", box_error(plain_picture),
-			box_error(offset_picture));
+		            box_error(offset_picture));
 		check(box_error(offset_picture) < box_error(plain_picture) && offset_size > plain_size,
 		      "the face offset buys a finer face");
 	}
@@ -908,8 +928,8 @@ namespace
 				written.push_back(grey_frame(textured_scene(640, 480)));
 				for (int y = 0; y < 480; ++y)
 					for (int x = 0; x < 640; ++x)
-						written.back().luma(x, y) = static_cast<uint8_t>(std::clamp(
-							written.back().luma(x, y) + (x + i * 8 < 320 ? -30 : 30), 0, 255));
+						written.back().luma(x, y) = static_cast<uint8_t>(
+							std::clamp(written.back().luma(x, y) + (x + i * 8 < 320 ? -30 : 30), 0, 255));
 				writes = writes && writer.write(written.back(), error);
 			}
 			check(writes && writer.frames() == 10 && writer.close(error), "a clip records and finishes");
@@ -962,10 +982,11 @@ namespace
 
 		const session_totals& sums = session.totals();
 		std::printf("  %d geometry packets, %d pictures (%d warped), largest delta %zu bytes, %.1f dB\n",
-			sums.lowban_geometry_packets, sums.lowban_picture_packets, sums.lowban_warped_packets,
-			sums.lowban_largest_picture_delta, state.lowban.quality.psnr);
+		            sums.lowban_geometry_packets, sums.lowban_picture_packets, sums.lowban_warped_packets,
+		            sums.lowban_largest_picture_delta, state.lowban.quality.psnr);
 		check(sums.lowban_geometry_packets >= 40 && sums.lowban_geometry_packets <= 46, "geometry runs at 15 Hz");
-		check(sums.lowban_picture_packets >= 2 && sums.lowban_picture_packets <= 16, "pictures run at no more than 5 Hz");
+		check(sums.lowban_picture_packets >= 2 && sums.lowban_picture_packets <= 16,
+		      "pictures run at no more than 5 Hz");
 		check(sums.lowban_largest_picture_delta <= picture_packet_budget, "every picture after startup fits its cap");
 		check(sums.lowban_warped_packets > 0, "moving geometry warps the held face");
 		check(state.lowban.quality.psnr > 24.0, "the low-ban receiver keeps a usable picture");
@@ -1098,8 +1119,7 @@ namespace
 
 		image_u8 img(640, 480);
 		for (int y = 0; y < 480; ++y)
-			for (int x = 0; x < 640; ++x)
-				img(x, y) = static_cast<uint8_t>((x * 3 + y * 5) & 0xFF);
+			for (int x = 0; x < 640; ++x) img(x, y) = static_cast<uint8_t>((x * 3 + y * 5) & 0xFF);
 
 		const rect_i box = rect_i::from_size(250, 150, 140, 140);
 		const std::vector<point_i> parts = predictor.predict(img, box);
@@ -1117,8 +1137,7 @@ namespace
 
 			const rect_i refined = predictor.box_from_parts(parts);
 			check(!refined.empty(), "box can be recovered from a shape");
-			check(std::abs(refined.width() - box.width()) < box.width() / 2,
-			      "recovered box is close to the original");
+			check(std::abs(refined.width() - box.width()) < box.width() / 2, "recovered box is close to the original");
 
 			// The receiver-side measurement: landmarks found in an unchanged picture from the
 			// same box are the source's own landmarks.
@@ -1134,6 +1153,8 @@ namespace
 int run_self_test()
 {
 	failures = 0;
+	checks = 0;
+	skipped = 0;
 
 	test_image_ops();
 	test_yuy2();
@@ -1149,6 +1170,6 @@ int run_self_test()
 	test_detector();
 	test_landmarks();
 
-	std::printf("\n%s\n", failures == 0 ? "all checks passed" : "there were failures");
+	std::printf("\n%d checks, %d failed, %d skipped\n", checks, failures, skipped);
 	return failures == 0 ? 0 : 1;
 }

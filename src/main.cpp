@@ -1,21 +1,20 @@
 // low-ban - low bandwidth video with face landmarking.
 //
-// The window is deliberately thin: it owns the frame, menu, presentation and
-// event loop, and does no image processing. Everything else lives in
-// engine/session and the modules below.
+// The window is deliberately thin: a libdesktop ui::shell owns the frame, menu bar and
+// event loop, this file adds the menus and the presentation, and none of it does image
+// processing. Everything else lives in engine/session and the modules below.
 //
 // Command line:
 //   /test         run the headless self test and exit with a non-zero code on failure
 //   /evaluate     score samples/*.png and samples/*.mp4 offline and print CSV
 //   /probe-h264   one H.264 round trip, run as a child to find out whether it crashes
-#include "libdesktop/ui.h"
-#include "libdesktop/ui/elements.h"
-#include "libdesktop/ui/menu_bar.h"
+#include "libdesktop/ui/shell.h"
 #include "libdesktop/ui/test_support.h"
 #include "libdesktop/render/software.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -50,8 +49,7 @@ namespace
 	// The title sits a third of the way down the space above the panes and the status line
 	// three paddings above the bottom. This much space above the panes keeps the title clear
 	// of them and the status line clear of the captions.
-	constexpr int minimum_pane_y = std::max(title_height * 3 / 2,
-	                                        layout_padding * 4 + label_height * caption_lines);
+	constexpr int minimum_pane_y = std::max(title_height * 3 / 2, layout_padding * 4 + label_height * caption_lines);
 
 	enum class command_mode
 	{
@@ -90,12 +88,6 @@ namespace
 	uint64_t painted_generation = 0;
 	render::font_face title_font = render::font_face::title;
 	render::font_face label_font = render::font_face::dialog;
-	render::font_metrics title_font_metrics;
-	render::font_metrics label_font_metrics;
-	bool fonts_ready = false;
-
-	ui::frame_ptr main_frame;
-	std::vector<ui::command_ptr> menus;
 
 	int menu_bar_height_for_scale(const double scale)
 	{
@@ -112,8 +104,29 @@ namespace
 	{
 		// These are the old content dimensions plus the same spare title/status margin used by
 		// the native window. The frame owns the non-client title bar.
-		return {video_width * 3 + layout_padding * 8,
-		        video_height + minimum_pane_y * 2 + 60};
+		return {video_width * 3 + layout_padding * 8, video_height + minimum_pane_y * 2 + 60};
+	}
+
+	// The shell takes sizes at 100% and scales them with the display, as the menu bar grows, but
+	// the panes stay one pixel to a pixel; a physical size is divided by the scale, rounded up so
+	// the shell's rounding cannot lose a pixel of it.
+	core::sizei shell_size(const core::sizei physical, const double scale)
+	{
+		return {static_cast<int>(std::ceil(physical.cx / scale)), static_cast<int>(std::ceil(physical.cy / scale))};
+	}
+
+	ui::shell_options make_options()
+	{
+		// The scale the shell applies, which minimum_client_size gives the menu bar.
+		const double scale = std::max(96, platform::primary_screen_dpi()) / 96.0;
+		ui::shell_options options;
+		options.client_size = shell_size(initial_client_size(), scale);
+		options.minimum_client = shell_size(minimum_client_size(scale), scale);
+		options.gpu = true;
+		// The frame's own dialog palette; the shell's default is the view's.
+		options.colors = render::color_style{ui::style::colors.dialog_background, ui::style::colors.dialog_text,
+		                                     ui::style::colors.dialog_selected_background};
+		return options;
 	}
 
 	pane_layout compute_layout(const core::sizei extent)
@@ -121,8 +134,7 @@ namespace
 		const int panes_width = video_width * 3 + layout_padding * 2;
 		const int left_x = (extent.cx - panes_width) / 2;
 		const int lowban_x = left_x + video_width + layout_padding;
-		return {left_x, lowban_x, lowban_x + video_width + layout_padding,
-		        (extent.cy - video_height) / 2};
+		return {left_x, lowban_x, lowban_x + video_width + layout_padding, (extent.cy - video_height) / 2};
 	}
 
 	command_mode parse_mode(const std::span<const std::string_view> params)
@@ -145,8 +157,7 @@ namespace
 		return command_mode::gui;
 	}
 
-	core::surface_ptr make_bgra_surface(const int width, const int height,
-	                                    const std::vector<uint8_t>& bgra)
+	core::surface_ptr make_bgra_surface(const int width, const int height, const std::vector<uint8_t>& bgra)
 	{
 		if (width <= 0 || height <= 0) return {};
 
@@ -188,8 +199,7 @@ namespace
 	}
 
 	template <typename GenerationReader, typename StateReader>
-	render_snapshot read_snapshot(GenerationReader&& read_generation,
-	                              StateReader&& read_latest)
+	render_snapshot read_snapshot(GenerationReader&& read_generation, StateReader&& read_latest)
 	{
 		const uint64_t generation = read_generation();
 		return {generation, read_latest()};
@@ -197,15 +207,13 @@ namespace
 
 	void refresh_cache()
 	{
-		const render_snapshot snapshot = read_snapshot(
-			[] { return pipeline.generation(); },
-			[] { return pipeline.latest(); });
+		const render_snapshot snapshot = read_snapshot([] { return pipeline.generation(); },
+		                                               [] { return pipeline.latest(); });
 		auto next = std::make_unique<render_cache>();
 		next->state = snapshot.state;
 		if (next->state)
 		{
-			next->source = make_bgra_surface(next->state->width, next->state->height,
-			                                next->state->source_bgra);
+			next->source = make_bgra_surface(next->state->width, next->state->height, next->state->source_bgra);
 			next->lowban = make_grey_surface(next->state->lowban.picture);
 			next->baseline = make_grey_surface(next->state->baseline.picture);
 		}
@@ -219,8 +227,8 @@ namespace
 	}
 
 	template <typename EnsureCache>
-	bool queue_cached_repaint(const uint64_t requested_generation, uint64_t& painted,
-	                          uint64_t& cached, EnsureCache&& ensure)
+	bool queue_cached_repaint(const uint64_t requested_generation, uint64_t& painted, uint64_t& cached,
+	                          EnsureCache&& ensure)
 	{
 		if (requested_generation == painted && cached == painted) return false;
 		ensure();
@@ -229,13 +237,20 @@ namespace
 		return true;
 	}
 
+	// The application frame tick: a generation published since the last one repaints the frame.
+	void tick_presentation(const ui::frame_ptr& frame)
+	{
+		const uint64_t requested_generation = pipeline.generation();
+		if (queue_cached_repaint(requested_generation, painted_generation, cached_generation, [] { ensure_cache(); }))
+		{
+			frame->invalidate();
+		}
+	}
+
 	void destroy_fonts()
 	{
 		title_font = render::font_face::title;
 		label_font = render::font_face::dialog;
-		title_font_metrics = {};
-		label_font_metrics = {};
-		fonts_ready = false;
 	}
 
 	bool create_fonts()
@@ -252,7 +267,6 @@ namespace
 
 		title_font = render::make_font(title);
 		label_font = render::make_font(label);
-		fonts_ready = true;
 		return true;
 	}
 
@@ -264,12 +278,10 @@ namespace
 		return text;
 	}
 
-	void draw_centred(render::draw_context& draw, const core::recti& bounds, const int y,
-	                  const std::string_view text, const render::font_face font,
-	                  const core::color colour)
+	void draw_centred(render::draw_context& draw, const core::recti& bounds, const int y, const std::string_view text,
+	                  const render::font_face font, const core::color colour)
 	{
-		const core::sizei extent = draw.measure_text(text, font, render::text_style::single_line,
-		                                             bounds.width());
+		const core::sizei extent = draw.measure_text(text, font, render::text_style::single_line, bounds.width());
 		const int x = std::max(bounds.left, (bounds.right - extent.cx) / 2);
 		const int bottom = std::max(y + 1, y + extent.cy);
 		const core::recti text_bounds{x, y, std::min(bounds.right, x + extent.cx), bottom};
@@ -283,60 +295,53 @@ namespace
 		const int y = pane_y + video_height + layout_padding + line * label_height;
 		const core::recti bounds{x, y, x + video_width, y + label_height};
 		draw.draw_rect(bounds, core::color(core::rgba(0, 0, 0)));
-		draw.draw_text(text, bounds, font, render::text_style::single_line,
-		               core::color(core::rgba(200, 200, 200)), {});
+		draw.draw_text(text, bounds, font, render::text_style::single_line, core::color(core::rgba(200, 200, 200)), {});
 	}
 
 	void draw_face_box(render::draw_context& draw, const int left, const int top, const rect_i& face)
 	{
 		const core::color colour(core::rgba(0, 220, 0));
 		const core::pointd a{static_cast<double>(left + face.left), static_cast<double>(top + face.top)};
-		const core::pointd b{static_cast<double>(left + face.right + 1),
-		                    static_cast<double>(top + face.bottom + 1)};
+		const core::pointd b{static_cast<double>(left + face.right + 1), static_cast<double>(top + face.bottom + 1)};
 		draw.draw_line(a, {b.X, a.Y}, colour, 2.0);
 		draw.draw_line({b.X, a.Y}, b, colour, 2.0);
 		draw.draw_line(b, {a.X, b.Y}, colour, 2.0);
 		draw.draw_line({a.X, b.Y}, a, colour, 2.0);
 	}
 
-	void draw_frame(render::draw_context& draw, const core::recti& bounds,
-	                const std::string_view status)
+	void draw_frame(render::draw_context& draw, const core::recti& bounds, const std::string_view status)
 	{
 		draw.draw_rect(bounds, core::color(core::rgba(0, 0, 0)));
 
 		const auto relative_layout = compute_layout(bounds.extent());
-		const pane_layout layout{
-			relative_layout.left_x + bounds.left,
-			relative_layout.lowban_x + bounds.left,
-			relative_layout.baseline_x + bounds.left,
-			relative_layout.pane_y + bounds.top};
+		const pane_layout layout{relative_layout.left_x + bounds.left, relative_layout.lowban_x + bounds.left,
+		                         relative_layout.baseline_x + bounds.left, relative_layout.pane_y + bounds.top};
 		draw_centred(draw, bounds, bounds.top + std::max(layout_padding, relative_layout.pane_y / 3),
-		             "Low bandwidth video with face landmarking", title_font,
-		             core::color(core::rgba(200, 200, 200)));
+		             "Low bandwidth video with face landmarking", title_font, core::color(core::rgba(200, 200, 200)));
 
 		ensure_cache();
 		if (cache && cache->state)
 		{
 			const auto& state = *cache->state;
-			render::draw_surface(draw, cache->source, {layout.left_x, layout.pane_y,
-		                                             layout.left_x + video_width,
-		                                             layout.pane_y + video_height});
-			render::draw_surface(draw, cache->lowban, {layout.lowban_x, layout.pane_y,
-		                                             layout.lowban_x + video_width,
-		                                             layout.pane_y + video_height});
-			render::draw_surface(draw, cache->baseline, {layout.baseline_x, layout.pane_y,
-		                                             layout.baseline_x + video_width,
-		                                             layout.pane_y + video_height});
+			render::draw_surface(draw, cache->source,
+			                     {layout.left_x, layout.pane_y, layout.left_x + video_width,
+			                      layout.pane_y + video_height});
+			render::draw_surface(draw, cache->lowban,
+			                     {layout.lowban_x, layout.pane_y, layout.lowban_x + video_width,
+			                      layout.pane_y + video_height});
+			render::draw_surface(draw, cache->baseline,
+			                     {layout.baseline_x, layout.pane_y, layout.baseline_x + video_width,
+			                      layout.pane_y + video_height});
 
 			// Drawn over the source so detection can be judged separately from landmarking.
 			for (const auto& face : state.faces) draw_face_box(draw, layout.left_x, layout.pane_y, face);
 
 			char text[192] = {};
-			std::snprintf(text, sizeof(text), "Original: %0.1f fps camera, %0.1f fps analysed",
-			              pipeline.source_fps(), pipeline.processed_fps());
+			std::snprintf(text, sizeof(text), "Original: %0.1f fps camera, %0.1f fps analysed", pipeline.source_fps(),
+			              pipeline.processed_fps());
 			draw_caption(draw, layout.left_x, layout.pane_y, 0, text, label_font);
-			std::snprintf(text, sizeof(text), "%d faces (peak detector score %0.2f)",
-			              state.face_count, state.peak_confidence);
+			std::snprintf(text, sizeof(text), "%d faces (peak detector score %0.2f)", state.face_count,
+			              state.peak_confidence);
 			draw_caption(draw, layout.left_x, layout.pane_y, 1, text, label_font);
 
 			const receiver_view& lowban = state.lowban;
@@ -345,12 +350,13 @@ namespace
 			              lowban.link_kbit_per_second);
 			draw_caption(draw, layout.lowban_x, layout.pane_y, 0, text, label_font);
 			const std::string lowban_expression = expression_text(lowban);
-			std::snprintf(text, sizeof(text), "PSNR %0.1f dB, face %0.1f dB, landmark error %s",
-			              lowban.quality.psnr, lowban.quality.weighted_psnr, lowban_expression.c_str());
+			std::snprintf(text, sizeof(text), "PSNR %0.1f dB, face %0.1f dB, landmark error %s", lowban.quality.psnr,
+			              lowban.quality.weighted_psnr, lowban_expression.c_str());
 			draw_caption(draw, layout.lowban_x, layout.pane_y, 1, text, label_font);
 			std::snprintf(text, sizeof(text), "last picture: %s, %d blocks",
 			              state.lowban_keyframe ? "startup keyframe"
-			              : state.lowban_warped ? "warped delta" : "delta",
+			              : state.lowban_warped ? "warped delta"
+			                                    : "delta",
 			              state.lowban_updated_blocks);
 			draw_caption(draw, layout.lowban_x, layout.pane_y, 2, text, label_font);
 
@@ -366,12 +372,10 @@ namespace
 				draw_caption(draw, layout.baseline_x, layout.pane_y, 0, text, label_font);
 				const std::string baseline_expression = expression_text(baseline);
 				std::snprintf(text, sizeof(text), "PSNR %0.1f dB, face %0.1f dB, landmark error %s",
-				              baseline.quality.psnr, baseline.quality.weighted_psnr,
-				              baseline_expression.c_str());
+				              baseline.quality.psnr, baseline.quality.weighted_psnr, baseline_expression.c_str());
 				draw_caption(draw, layout.baseline_x, layout.pane_y, 1, text, label_font);
 				std::snprintf(text, sizeof(text), "%d kbit/s constant rate, %d fps, face offset %s",
-				              baseline_kbit_per_second, geometry_hz,
-				              state.baseline_face_offset ? "on" : "off");
+				              baseline_kbit_per_second, geometry_hz, state.baseline_face_offset ? "on" : "off");
 				draw_caption(draw, layout.baseline_x, layout.pane_y, 2, text, label_font);
 			}
 		}
@@ -383,45 +387,37 @@ namespace
 		}
 	}
 
-	void invalidate_after_menu()
-	{
-		if (main_frame) main_frame->invalidate();
-	}
-
-	ui::command_ptr make_toggle_command(const std::string_view text,
-	                                    const std::function<bool()>& read,
-	                                    const std::function<void()>& toggle)
+	ui::command_ptr make_toggle_command(const ui::element_host& host, const std::string_view text,
+	                                    const std::function<bool()>& read, const std::function<void()>& toggle)
 	{
 		auto command = std::make_shared<ui::command>();
 		command->text = text;
 		command->checkable = true;
 		command->checked = read();
-		command->invoke = [command, read, toggle]
+		command->invoke = [&host, command, read, toggle]
 		{
 			toggle();
 			command->checked = read();
-			invalidate_after_menu();
+			host.frame()->invalidate();
 		};
 		return command;
 	}
 
-	std::vector<ui::command_ptr> build_menu()
+	std::vector<ui::command_ptr> build_menu(const ui::element_host& host)
 	{
-		auto file_record = make_toggle_command("&Record clip",
-		                                      [] { return pipeline.recording(); },
-		                                      [] { pipeline.set_recording(!pipeline.recording()); });
+		auto file_record = make_toggle_command(host, "&Record clip", [] { return pipeline.recording(); },
+		                                       [] { pipeline.set_recording(!pipeline.recording()); });
 		auto file_exit = std::make_shared<ui::command>();
 		file_exit->text = "E&xit";
-		file_exit->invoke = []
+		file_exit->invoke = [&host]
 		{
-			if (main_frame) main_frame->close();
+			host.frame()->close();
 		};
 
 		auto file_separator = std::make_shared<ui::command>();
 		auto file = std::make_shared<ui::command>();
 		file->text = "&File";
-		file->menu = [file_record,
-		              children = std::vector<ui::command_ptr>{file_record, file_separator, file_exit}]
+		file->menu = [file_record, children = std::vector<ui::command_ptr>{file_record, file_separator, file_exit}]
 		{
 			// Capture can stop a clip after an I/O or camera error, so the check belongs to
 			// menu construction rather than to the last UI click.
@@ -429,14 +425,11 @@ namespace
 			return children;
 		};
 
-		auto view_detect = make_toggle_command("Face &detect",
-		                                       [] { return pipeline.show_faces(); },
+		auto view_detect = make_toggle_command(host, "Face &detect", [] { return pipeline.show_faces(); },
 		                                       [] { pipeline.set_show_faces(!pipeline.show_faces()); });
-		auto view_landmark = make_toggle_command("Face &landmarking",
-		                                         [] { return pipeline.show_landmarks(); },
+		auto view_landmark = make_toggle_command(host, "Face &landmarking", [] { return pipeline.show_landmarks(); },
 		                                         [] { pipeline.set_show_landmarks(!pipeline.show_landmarks()); });
-		auto view_overlay = make_toggle_command("Landmark &overlay",
-		                                        [] { return pipeline.show_overlay(); },
+		auto view_overlay = make_toggle_command(host, "Landmark &overlay", [] { return pipeline.show_overlay(); },
 		                                        [] { pipeline.set_show_overlay(!pipeline.show_overlay()); });
 		auto view = std::make_shared<ui::command>();
 		view->text = "&View";
@@ -464,163 +457,12 @@ namespace
 		return {file, view, help};
 	}
 
-	class canvas_element final : public ui::element
-	{
-		std::function<void(render::draw_context&, core::recti)> _paint;
-
-	public:
-		canvas_element(std::function<void(render::draw_context&, core::recti)> paint,
-		               const ui::element_options& options) : ui::element(options), _paint(std::move(paint))
-		{
-		}
-
-		core::sizei measure(render::measure_context&, const int) const override
-		{
-			return {};
-		}
-
-		void render(render::draw_context& dc, const core::pointi offset) const override
-		{
-			if (_paint) _paint(dc, bounds.offset(offset));
-		}
-	};
-
-	class low_ban_host final : public ui::element_host,
-	                           public std::enable_shared_from_this<low_ban_host>
-	{
-		ui::elements_ptr _root;
-		ui::frame_ptr _frame;
-
-	public:
-		explicit low_ban_host(const std::vector<ui::command_ptr>& commands)
-		{
-			_root = std::make_shared<ui::elements>();
-			_root->flex_container.direction = ui::flex_direction::column;
-			_root->flex_container.wrap = ui::flex_wrap::no_wrap;
-			_root->flex_container.align_items = ui::flex_align::stretch;
-
-			auto menu = ui::make_menu_bar(commands);
-			menu->flex.shrink = 0.0f;
-
-			auto canvas = std::make_shared<canvas_element>(
-				[](render::draw_context& dc, const core::recti bounds)
-				{
-					draw_frame(dc, bounds, pipeline.status());
-				},
-				ui::element_options(ui::flex_item::grow | ui::flex_item::stretch));
-			// The presentation owns every pixel in this region; element chrome would leave a
-			// frame-coloured strip around the black scene.
-			canvas->padding(0);
-			canvas->margin(0);
-
-			_root->add(menu);
-			_root->add(canvas);
-		}
-
-		void set_frame(ui::frame_ptr frame)
-		{
-			_frame = std::move(frame);
-		}
-
-		void on_window_layout(render::measure_context& mc, const core::sizei extent,
-		                     const bool is_minimized) override
-		{
-			_extent = extent;
-			if (is_minimized) return;
-			if (fonts_ready)
-			{
-				title_font_metrics = render::metrics(mc, title_font);
-				label_font_metrics = render::metrics(mc, label_font);
-			}
-			_root->layout(mc, core::recti(extent));
-		}
-
-		void on_window_paint(render::draw_context& dc) override
-		{
-			dc.time_now = core::now();
-			_root->render(dc, {});
-		}
-
-		void frame_tick()
-		{
-			const uint64_t requested_generation = pipeline.generation();
-			if (queue_cached_repaint(requested_generation, painted_generation,
-			                         cached_generation, [] { ensure_cache(); }) && _frame)
-			{
-				_frame->invalidate();
-			}
-		}
-
-		void visit_elements(const std::function<void(const ui::element_ptr&, core::pointi)>& visit) override
-		{
-			visit(_root, {});
-		}
-
-		ui::controller_ptr controller_from_location(const core::pointi loc,
-		                                             ui::hit_test_context& ctx) override
-		{
-			const auto self = std::static_pointer_cast<ui::element_host>(shared_from_this());
-			return _root->controller_from_location(self, loc, {}, ctx);
-		}
-
-		void invoke(commands) override
-		{
-		}
-
-		bool is_command_checked(commands) override
-		{
-			return false;
-		}
-
-		void track_menu(const core::recti bounds,
-		                const std::vector<ui::command_ptr>& commands) override
-		{
-			if (_frame) _frame->track_menu(bounds, commands);
-		}
-
-		void invalidate_element(const ui::element_ptr& element) override
-		{
-			if (_frame) _frame->invalidate(element ? element->invalidate_bounds() : core::recti{});
-		}
-
-		void invalidate(const ui::host_invalid what) override
-		{
-			if (!_frame) return;
-			if (what && ui::host_invalid::layout) _frame->layout();
-			if (what && ui::host_invalid::redraw) _frame->invalidate();
-		}
-
-		void controller_changed() override
-		{
-			if (_frame) _frame->invalidate();
-		}
-
-		const ui::frame_ptr frame() const override
-		{
-			return _frame ? _frame : ui::no_frame();
-		}
-
-		const ui::frame_ptr owner() override
-		{
-			return _frame ? _frame : ui::no_frame();
-		}
-
-		void on_window_destroy() override
-		{
-			ui::element_host::on_window_destroy();
-			_frame.reset();
-		}
-	};
-
 	class recording_frame final : public ui::null_frame
 	{
 	public:
 		int invalidates = 0;
 
-		void invalidate(core::recti = {}, bool = false) override
-		{
-			++invalidates;
-		}
+		void invalidate(core::recti = {}, bool = false) override { ++invalidates; }
 	};
 
 	class recording_texture final : public render::texture
@@ -636,16 +478,13 @@ namespace
 			return render::texture_update_result::tex_updated;
 		}
 
-		render::texture_update_result update(core::sizei, core::texture_format, core::orientation,
-		                                    const uint8_t*, size_t, size_t) override
+		render::texture_update_result update(core::sizei, core::texture_format, core::orientation, const uint8_t*,
+		                                     size_t, size_t) override
 		{
 			return render::texture_update_result::tex_updated;
 		}
 
-		bool is_valid() const override
-		{
-			return true;
-		}
+		bool is_valid() const override { return true; }
 	};
 
 	class recording_draw_context final : public ui::test::fake_draw_context
@@ -653,17 +492,12 @@ namespace
 	public:
 		int texture_calls = 0;
 
-		explicit recording_draw_context(const core::recti clip) : ui::test::fake_draw_context(clip)
-		{
-		}
+		explicit recording_draw_context(const core::recti clip) : ui::test::fake_draw_context(clip) {}
 
-		render::texture_ptr create_texture() override
-		{
-			return std::make_shared<recording_texture>();
-		}
+		render::texture_ptr create_texture() override { return std::make_shared<recording_texture>(); }
 
-		void draw_texture(const render::texture_ptr& texture, const core::recti dst,
-		                  const float alpha, const render::texture_sampler sampler) override
+		void draw_texture(const render::texture_ptr& texture, const core::recti dst, const float alpha,
+		                  const render::texture_sampler sampler) override
 		{
 			++texture_calls;
 			ui::test::fake_draw_context::draw_texture(texture, dst, alpha, sampler);
@@ -699,9 +533,7 @@ namespace
 	{
 		return std::any_of(draw.texts.begin(), draw.texts.end(),
 		                   [needle](const ui::test::fake_draw_context::text_draw& text)
-		                   {
-			                   return text.text.find(needle) != std::string::npos;
-		                   });
+		{ return text.text.find(needle) != std::string::npos; });
 	}
 
 	void gui_check(const bool condition, const char* description, int& failures)
@@ -710,8 +542,7 @@ namespace
 		std::printf("  [%s] %s\n", condition ? "pass" : "FAIL", description);
 	}
 
-	int run_gui_self_test(const std::function<void()>& app_frame_tick,
-	                     const std::function<int()>& invalidation_count)
+	int run_gui_self_test()
 	{
 		std::printf("GUI sizing and command modes\n");
 		int failures = 0;
@@ -719,6 +550,8 @@ namespace
 		auto measure_surface = std::make_shared<core::surface>();
 		measure_surface->alloc(1, 1, core::texture_format::ARGB);
 		const auto measure_context = render::create_surface_context(measure_surface);
+		render::font_metrics title_font_metrics;
+		render::font_metrics label_font_metrics;
 		if (presentation_fonts_ready && measure_context)
 		{
 			auto& mc = *measure_context;
@@ -726,24 +559,36 @@ namespace
 			label_font_metrics = render::metrics(mc, label_font);
 		}
 		// DirectWrite measures the line each cell request asks for, as the original GDI font laid it out.
-		gui_check(presentation_fonts_ready && measure_context &&
-		          title_font_metrics.height == title_height &&
-		          label_font_metrics.height == label_height,
-		          "Segoe UI cell fonts retain the old 48/24 pixel cell requests and measured line heights",
-		          failures);
+		gui_check(presentation_fonts_ready && measure_context && title_font_metrics.height == title_height &&
+		              label_font_metrics.height == label_height,
+		          "Segoe UI cell fonts retain the old 48/24 pixel cell requests and measured line heights", failures);
 
 		const core::sizei minimum = minimum_client_size();
 		gui_check(minimum == core::sizei(1968, 720 + menu_bar_height_for_scale(1.0)),
 		          "minimum client size leaves room for the drawn menu and all captions at 100%", failures);
 		const core::sizei scaled_minimum = minimum_client_size(1.5);
 		gui_check(scaled_minimum == core::sizei(1968, 720 + menu_bar_height_for_scale(1.5)) &&
-		          menu_bar_height_for_scale(1.5) == 42,
+		              menu_bar_height_for_scale(1.5) == 42,
 		          "minimum client size grows with a scaled menu bar", failures);
+
+		// The shell multiplies the sizes it is given by the display scale and rounds.
+		bool shell_sizes_kept = true;
+		for (const double scale : {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0})
+		{
+			for (const core::sizei physical : {initial_client_size(), minimum_client_size(scale)})
+			{
+				const core::sizei given = shell_size(physical, scale);
+				shell_sizes_kept = shell_sizes_kept && core::round(given.cx * scale) >= physical.cx &&
+				                   core::round(given.cy * scale) >= physical.cy;
+			}
+		}
+		gui_check(shell_sizes_kept, "the shell's display scaling keeps every physical pixel of the client sizes",
+		          failures);
 
 		const core::sizei content_minimum{minimum.cx, minimum.cy - menu_bar_height_for_scale(1.0)};
 		const pane_layout minimum_layout = compute_layout(content_minimum);
 		gui_check(minimum_layout.left_x == layout_padding && minimum_layout.lowban_x == 664 &&
-		          minimum_layout.baseline_x == 1316 && minimum_layout.pane_y == minimum_pane_y,
+		              minimum_layout.baseline_x == 1316 && minimum_layout.pane_y == minimum_pane_y,
 		          "minimum layout is centred with a full caption area", failures);
 
 		const pane_layout larger_layout = compute_layout({2016, 780});
@@ -756,15 +601,14 @@ namespace
 		int latest_calls = 0;
 		const render_snapshot snapshot = read_snapshot(
 			[&]
-			{
-				++generation_reads;
-				return ++source_generation;
-			},
-			[&]() -> std::shared_ptr<const render_state>
-			{
-				++latest_calls;
-				return second_state;
-			});
+		{
+			++generation_reads;
+			return ++source_generation;
+		}, [&]() -> std::shared_ptr<const render_state>
+		{
+			++latest_calls;
+			return second_state;
+		});
 		uint64_t repaint_painted = 1;
 		uint64_t repaint_cached = 1;
 		const std::array<uint64_t, 2> cached_updates{2, 3};
@@ -778,19 +622,16 @@ namespace
 			repaint_tokens.push_back(repaint_painted);
 		if (queue_cached_repaint(3, repaint_painted, repaint_cached, ensure_repaint_cache))
 			repaint_tokens.push_back(repaint_painted);
-		gui_check(snapshot.generation == 1 && snapshot.state == second_state &&
-		          generation_reads == 1 && latest_calls == 1 &&
-		          repaint_tokens == std::vector<uint64_t>{2, 3} && cached_update_index == 2,
-		          "bounded snapshot freshness and cached-token repaint catch the final generation",
-		          failures);
+		gui_check(snapshot.generation == 1 && snapshot.state == second_state && generation_reads == 1 &&
+		              latest_calls == 1 && repaint_tokens == std::vector<uint64_t>{2, 3} && cached_update_index == 2,
+		          "bounded snapshot freshness and cached-token repaint catch the final generation", failures);
 
 		painted_generation = UINT64_MAX;
 		cached_generation = pipeline.generation();
 		cache.reset();
-		const int invalidates_before_tick = invalidation_count();
-		app_frame_tick();
-		gui_check(invalidation_count() == invalidates_before_tick + 1 &&
-		          cached_generation == pipeline.generation(),
+		const auto tick_frame = std::make_shared<recording_frame>();
+		tick_presentation(tick_frame);
+		gui_check(tick_frame->invalidates == 1 && cached_generation == pipeline.generation(),
 		          "the application frame tick caches a generation and invalidates the frame", failures);
 
 		set_recorded_cache(second_state);
@@ -798,10 +639,8 @@ namespace
 		recording_draw_context draw({0, 0, 1968, 720});
 		draw_frame(draw, draw.clip_bounds(), "camera unavailable");
 		// The H.264 pane has no picture while its encoder is unavailable, so two panes draw one.
-		gui_check(draw.texture_calls == 2 && draw.lines.size() >= 4 &&
-		          has_recorded_text(draw, "low-ban:") &&
-		          has_recorded_text(draw, "H.264 unavailable") &&
-		          has_recorded_text(draw, "camera unavailable"),
+		gui_check(draw.texture_calls == 2 && draw.lines.size() >= 4 && has_recorded_text(draw, "low-ban:") &&
+		              has_recorded_text(draw, "H.264 unavailable") && has_recorded_text(draw, "camera unavailable"),
 		          "captions, face overlay and status share one render draw_context paint", failures);
 
 		const std::array<std::string_view, 1> test_params{"/TeSt"};
@@ -811,8 +650,8 @@ namespace
 		gui_check(parse_mode(test_params) == command_mode::test, "mode parsing accepts /test case-insensitively",
 		          failures);
 		gui_check(parse_mode(evaluate_params) == command_mode::evaluate &&
-		          parse_mode(probe_params) == command_mode::probe_h264 &&
-		          parse_mode(gui_params) == command_mode::gui,
+		              parse_mode(probe_params) == command_mode::probe_h264 &&
+		              parse_mode(gui_params) == command_mode::gui,
 		          "mode parsing keeps evaluate, probe and GUI modes distinct", failures);
 
 		const std::array<std::string_view, 2> mixed_params{"/evaluate", "/test"};
@@ -844,46 +683,13 @@ namespace
 		});
 	}
 
-	class low_ban_app final : public ui::app,
-	                          public std::enable_shared_from_this<low_ban_app>
+	class low_ban_app final : public ui::shell
 	{
 		command_mode _mode = command_mode::gui;
-		platform::setting_file_ptr _settings;
-		std::shared_ptr<low_ban_host> _host;
 		bool _pipeline_started = false;
-		bool _cleaned_up = false;
-
-		void cleanup()
-		{
-			if (_cleaned_up) return;
-			_cleaned_up = true;
-			// The fast callback belongs to this app instance; leaving it armed would tick a
-			// destroyed frame while platform::run is tearing down.
-			platform::set_frame_delay(0);
-			if (_pipeline_started)
-			{
-				pipeline.stop();
-				_pipeline_started = false;
-			}
-			media.reset();
-			cache.reset();
-			menus.clear();
-			_host.reset();
-			main_frame.reset();
-			destroy_fonts();
-		}
 
 	public:
-		~low_ban_app() override
-		{
-			cleanup();
-		}
-
-		bool load_settings(const platform::setting_file_ptr& store) override
-		{
-			_settings = store;
-			return true;
-		}
+		low_ban_app() : shell(ui::shell_options{}) {}
 
 		bool parse_command_line(const std::string_view command_line) override
 		{
@@ -895,94 +701,38 @@ namespace
 		int run_console_mode() override
 		{
 			if (_mode != command_mode::test) return ::run_console_mode(_mode, {});
-			const auto test_frame = std::make_shared<recording_frame>();
-			_host = std::make_shared<low_ban_host>(std::vector<ui::command_ptr>{});
-			_host->set_frame(test_frame);
-			const int result = ::run_console_mode(_mode, [this, test_frame]
-			{
-				return run_gui_self_test([this] { frame_tick(); },
-				                           [test_frame] { return test_frame->invalidates; });
-			});
-			_host.reset();
-			return result;
+			return ::run_console_mode(_mode, run_gui_self_test);
 		}
 
-		void frame_tick() override
-		{
-			if (_host) _host->frame_tick();
-		}
-
-		bool wants_gpu() const override
-		{
-			return true;
-		}
-
-		bool key_down(const char32_t key, const platform::key_state keys) override
-		{
-			return ui::dispatch_accelerator(menus, key, keys);
-		}
-
-		bool text_input(std::string_view) override
-		{
-			return false;
-		}
-
-		ui::focus_mode focus_mode() const override
-		{
-			return ui::focus_mode::none;
-		}
-
-		void track_menu(const ui::frame_ptr& parent, const core::recti bounds,
-		                const std::vector<ui::command_ptr>& commands) override
-		{
-			if (parent) parent->track_menu(bounds, commands);
-		}
-
-		bool init(std::string_view) override
+		bool init(const std::string_view command_line) override
 		{
 			if (_mode != command_mode::gui) return false;
-			const bool placement_restored = platform::read_placement(
-				_settings, platform::placement_setting_name()).has_value();
 			if (!create_fonts())
 			{
 				platform::show_error("Could not create the Segoe UI presentation fonts.");
 				return false;
 			}
 
-			menus = build_menu();
-			_host = std::make_shared<low_ban_host>(menus);
+			// Settled here, once platform::run has made the process DPI aware and ui::app has
+			// installed the palette.
+			initial_options() = make_options();
+			if (shell::init(command_line)) return true;
 
-			ui::frame_style style;
-			style.hardware_accelerated = wants_gpu();
-			style.drawn_caption = false;
-			style.client_size = initial_client_size();
-			const double menu_scale = static_cast<double>(platform::primary_screen_dpi()) / 96.0;
-			style.minimum_client = minimum_client_size(menu_scale);
-			style.resizable = true;
+			platform::show_error("Could not create the low-ban presentation window.");
+			quit(1);
+			return false;
+		}
 
-			main_frame = ui::create_app_frame(shared_from_this(), _settings, _host, style);
-			if (!main_frame)
-			{
-				platform::show_error("Could not create the low-ban presentation window.");
-				platform::quit(1);
-				return false;
-			}
-			_host->set_frame(main_frame);
-			main_frame->window_text("low-ban");
+		std::vector<ui::command_ptr> make_menus() override { return build_menu(*this); }
 
-			if (!placement_restored)
-			{
-				const auto screen = platform::primary_screen_size();
-				const auto desired = initial_client_size();
-				if (!screen.is_empty())
-				{
-					const core::recti centered{
-						(screen.cx - desired.cx) / 2, (screen.cy - desired.cy) / 2,
-						(screen.cx + desired.cx) / 2, (screen.cy + desired.cy) / 2};
-					main_frame->window_bounds(centered, false);
-				}
-			}
+		ui::element_ptr make_content() override
+		{
+			return std::make_shared<ui::canvas_element>([](render::draw_context& dc, const core::recti bounds)
+			{ draw_frame(dc, bounds, pipeline.status()); });
+		}
 
+		bool start(std::string_view) override
+		{
 			platform::set_frame_delay(16);
 			media = std::make_unique<media_foundation>();
 			pipeline.start(video_width, video_height);
@@ -990,19 +740,21 @@ namespace
 			return true;
 		}
 
-		bool can_exit() override
-		{
-			return true;
-		}
+		void frame_tick() override { tick_presentation(frame()); }
 
-		void exit() override
+		void stop() override
 		{
-			cleanup();
-		}
-
-		void final_exit() override
-		{
-			cleanup();
+			// The fast callback belongs to this app instance; leaving it armed would tick a
+			// destroyed frame while platform::run is tearing down.
+			platform::set_frame_delay(0);
+			if (_pipeline_started)
+			{
+				pipeline.stop();
+				_pipeline_started = false;
+			}
+			media.reset();
+			cache.reset();
+			destroy_fonts();
 		}
 	};
 }

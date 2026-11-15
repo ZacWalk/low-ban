@@ -18,7 +18,7 @@ struct reconstruction_quality
 };
 
 reconstruction_quality measure_quality(const image_u8& source, const image_u8& reconstructed,
-	                                    const image_u8* importance = nullptr);
+                                       const image_u8* importance = nullptr);
 void add_face_importance(image_u8& importance, const rect_i& face, const std::vector<point_i>& landmarks);
 
 // An intra-frame transform codec in the same family as traditional MPEG codecs. Luma is
@@ -33,16 +33,16 @@ public:
 	// Straight intra coding of a whole frame, with no wire format involved. The stream below
 	// is what actually measures rate; this is here for comparisons that only need the picture.
 	void reconstruct(const image_u8& source, const image_u8* importance, image_u8& reconstructed) const;
-	void encode_coefficients(const image_u8& source, const image_u8* importance,
-		std::vector<int16_t>& coefficients, std::vector<uint8_t>& quantizers) const;
-	bool reconstruct_coefficients(const std::vector<int16_t>& coefficients,
-		const std::vector<uint8_t>& quantizers, int width, int height, image_u8& reconstructed) const;
+	void encode_coefficients(const image_u8& source, const image_u8* importance, std::vector<int16_t>& coefficients,
+	                         std::vector<uint8_t>& quantizers) const;
+	bool reconstruct_coefficients(const std::vector<int16_t>& coefficients, const std::vector<uint8_t>& quantizers,
+	                              int width, int height, image_u8& reconstructed) const;
 
 	// Quantised transform of an 8x8 window of an already decoded frame, displaced by a motion
 	// vector. Both endpoints run this over the same reference, so a block that merely moved
 	// costs its vector and a residual instead of a fresh copy of its texture.
-	void predict_block(const image_u8& reference, int block_x, int block_y, int dx, int dy,
-		int quantizer, int16_t* coefficients) const;
+	void predict_block(const image_u8& reference, int block_x, int block_y, int dx, int dy, int quantizer,
+	                   int16_t* coefficients) const;
 };
 
 struct transform_packet
@@ -71,11 +71,10 @@ class temporal_transform_stream
 {
 public:
 	void reset();
-	transform_packet encode(const transform_codec& codec, const image_u8& source,
-		const image_u8* importance, bool force_keyframe, size_t max_packet_bytes,
-		const face_geometry& geometry = {});
-	bool decode(const transform_codec& codec, const transform_packet& packet,
-		int width, int height, image_u8& reconstructed, const face_geometry& geometry = {});
+	transform_packet encode(const transform_codec& codec, const image_u8& source, const image_u8* importance,
+	                        bool force_keyframe, size_t max_packet_bytes, const face_geometry& geometry = {});
+	bool decode(const transform_codec& codec, const transform_packet& packet, int width, int height,
+	            image_u8& reconstructed, const face_geometry& geometry = {});
 
 	// What the receiver shows before the next packet arrives: its decoded picture with the
 	// face warped onto newer geometry, unless the encoder's last word on the warp was that it
@@ -88,9 +87,9 @@ private:
 	std::vector<uint8_t> encoder_quantizers;
 	std::vector<uint8_t> decoder_quantizers;
 	std::vector<uint16_t> encoder_age; // packets a block has waited, to stop starvation
-	image_u8 encoder_reference; // the encoder's copy of what the decoder is showing
-	image_u8 decoder_reference; // what motion vectors in the next packet may point into
-	face_geometry encoder_geometry; // the geometry each reference was decoded at
+	image_u8 encoder_reference;        // the encoder's copy of what the decoder is showing
+	image_u8 decoder_reference;        // what motion vectors in the next packet may point into
+	face_geometry encoder_geometry;    // the geometry each reference was decoded at
 	face_geometry decoder_geometry;
 	bool encoder_animating = false; // the encoder's copy of whether the receiver animates
 	bool decoder_animating = false;
