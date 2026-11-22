@@ -2,8 +2,9 @@
 # dd project command backing script for low-ban.
 #
 # Ported from the pre-dd bespoke driver. Scores the PNG samples in samples/
-# offline against H.264 at equal bytes, and replays any recorded clips there
-# through the call session, with no camera needed.
+# offline against H.264 at equal bytes, and replays any clips there - recorded
+# .mp4 or YUV4MPEG2 .y4m test sequences - through the call session, with no
+# camera needed.
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
@@ -21,14 +22,12 @@ $suffix = if ($config -eq 'debug') { 'd' } else { '' }
 $ext = if ($IsWindows) { '.exe' } else { '' }
 $app = Join-Path $root "exe/low-ban-64$suffix$ext"
 
-# The landmark model is optional: the codec runs without it, but the face-weighted
-# importance map is what the evaluation is actually measuring.
-$model = Join-Path $root 'exe/shape_predictor_68_face_landmarks.dat'
 $samples = @(Get-ChildItem (Join-Path $root 'samples') -Filter '*.png' -File -ErrorAction SilentlyContinue)
-$clips = @(Get-ChildItem (Join-Path $root 'samples') -Filter '*.mp4' -File -ErrorAction SilentlyContinue)
+$clips = @(Get-ChildItem (Join-Path $root 'samples') -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in '.mp4', '.y4m' })
 
 $plan = @{ command = 'evaluate'; binary = $app; arguments = @('/evaluate')
-    sampleCount = $samples.Count; clipCount = $clips.Count; landmarkModel = [bool](Test-Path -LiteralPath $model) }
+    sampleCount = $samples.Count; clipCount = $clips.Count }
 
 if ($request.dryRun) {
     @{ schema = 1; data = @{ status = 'planned'; plan = $plan }; files = @() } |

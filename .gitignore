@@ -404,6 +404,11 @@ exe/
 intermediate/
 /.dd/state/
 
-# Clips recorded with File > Record clip show whoever was in front of the camera
+# Clips recorded with the Record clip button show whoever was in front of the camera, and
+# YUV4MPEG2 test sequences run to hundreds of megabytes
 samples/*.mp4
+samples/*.y4m
 /tmp/
+
+# The Python environment tools/requirements.txt describes.
+.venv/

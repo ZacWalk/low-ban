@@ -1,10 +1,14 @@
 #include "capture.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <memory>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include <windows.h>
 #include <codecapi.h>
@@ -13,6 +17,7 @@
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 
 #include "baseline.h"
@@ -458,7 +463,217 @@ struct clip_reader::impl
 	UINT32 width = 0;
 	UINT32 height = 0;
 	LONG stride = 0;
+
+	// A YUV4MPEG2 stream instead, read straight from the file.
+	FILE* y4m = nullptr;
+	int source_width = 0;
+	int source_height = 0;
+	int target_width = 0;
+	int target_height = 0;
+	double frame_seconds = 0.0;
+	int frames = 0;
+	std::vector<uint8_t> buffer;
+
+	impl() = default;
+	impl(const impl&) = delete;
+	impl& operator=(const impl&) = delete;
+	~impl()
+	{
+		if (y4m != nullptr) std::fclose(y4m);
+	}
 };
+
+namespace
+{
+	bool is_y4m(const std::wstring& path)
+	{
+		return path.size() >= 4 && _wcsicmp(path.c_str() + path.size() - 4, L".y4m") == 0;
+	}
+
+	bool read_line(FILE* file, std::string& line)
+	{
+		line.clear();
+		for (int c = std::fgetc(file); c != EOF; c = std::fgetc(file))
+		{
+			if (c == '\n') return true;
+			if (line.size() >= 1024) return false;
+			line.push_back(static_cast<char>(c));
+		}
+		return !line.empty();
+	}
+
+	// Where each output sample along one axis reads from: the footprint it covers when
+	// shrinking, so nothing aliases, or its two nearest neighbours when enlarging.
+	struct resample_taps
+	{
+		std::vector<int> first;
+		std::vector<std::vector<float>> weights;
+	};
+
+	resample_taps make_resample_taps(const int source, const int target)
+	{
+		resample_taps taps;
+		taps.first.resize(static_cast<size_t>(target));
+		taps.weights.resize(static_cast<size_t>(target));
+		const double ratio = static_cast<double>(source) / target;
+		for (int i = 0; i < target; ++i)
+		{
+			auto& weights = taps.weights[static_cast<size_t>(i)];
+			if (ratio > 1.0)
+			{
+				const double start = i * ratio;
+				const double end = start + ratio;
+				const int first = static_cast<int>(std::floor(start));
+				taps.first[static_cast<size_t>(i)] = first;
+				for (int s = first; s < end && s < source; ++s)
+					weights.push_back(
+						static_cast<float>((std::min<double>(s + 1, end) - std::max<double>(s, start)) / ratio));
+			}
+			else
+			{
+				const double centre = std::max(0.0, (i + 0.5) * ratio - 0.5);
+				const int first = std::min(static_cast<int>(centre), source - 1);
+				const auto t = static_cast<float>(centre - first);
+				taps.first[static_cast<size_t>(i)] = first;
+				weights = {1.0f - t, t};
+			}
+		}
+		return taps;
+	}
+
+	// A window of a plane scaled to fill `out`.
+	void resample_plane(const uint8_t* plane, const int stride, const int left, const int top, const int width,
+	                    const int height, image_u8& out)
+	{
+		const resample_taps columns = make_resample_taps(width, out.width());
+		const resample_taps rows = make_resample_taps(height, out.height());
+		std::vector<float> horizontal(static_cast<size_t>(out.width()) * height);
+		for (int y = 0; y < height; ++y)
+		{
+			const uint8_t* in = plane + static_cast<size_t>(top + y) * stride + left;
+			for (int x = 0; x < out.width(); ++x)
+			{
+				const auto& weights = columns.weights[static_cast<size_t>(x)];
+				const int first = columns.first[static_cast<size_t>(x)];
+				float sum = 0.0f;
+				for (size_t k = 0; k < weights.size(); ++k)
+					sum += weights[k] * in[std::min(first + static_cast<int>(k), width - 1)];
+				horizontal[static_cast<size_t>(y) * out.width() + x] = sum;
+			}
+		}
+		for (int y = 0; y < out.height(); ++y)
+		{
+			const auto& weights = rows.weights[static_cast<size_t>(y)];
+			const int first = rows.first[static_cast<size_t>(y)];
+			for (int x = 0; x < out.width(); ++x)
+			{
+				float sum = 0.0f;
+				for (size_t k = 0; k < weights.size(); ++k)
+					sum += weights[k] *
+					       horizontal[static_cast<size_t>(std::min(first + static_cast<int>(k), height - 1)) *
+					                      out.width() +
+					                  x];
+				out(x, y) = static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(sum)), 0, 255));
+			}
+		}
+	}
+}
+
+// The stream's header: its size, its frame rate and 4:2:0 chroma, the only layout read here.
+bool clip_reader::open_y4m(const std::wstring& path, const int width, const int height, std::string& error)
+{
+	auto owned = std::make_unique<impl>();
+	if (_wfopen_s(&owned->y4m, path.c_str(), L"rb") != 0 || owned->y4m == nullptr)
+	{
+		error = "could not open the clip";
+		return false;
+	}
+
+	std::string header;
+	if (!read_line(owned->y4m, header) || header.rfind("YUV4MPEG2 ", 0) != 0)
+	{
+		error = "the clip is not a YUV4MPEG2 stream";
+		return false;
+	}
+	long rate = 0;
+	long scale = 0;
+	bool four_two_zero = true;
+	for (size_t start = 10; start < header.size();)
+	{
+		size_t end = header.find(' ', start);
+		if (end == std::string::npos) end = header.size();
+		const std::string field = header.substr(start, end - start);
+		if (!field.empty())
+		{
+			const char* value = field.c_str() + 1;
+			if (field[0] == 'W') owned->source_width = std::atoi(value);
+			else if (field[0] == 'H') owned->source_height = std::atoi(value);
+			else if (field[0] == 'F')
+			{
+				char* colon = nullptr;
+				rate = std::strtol(value, &colon, 10);
+				scale = colon != nullptr && *colon == ':' ? std::strtol(colon + 1, nullptr, 10) : 0;
+			}
+			else if (field[0] == 'C') four_two_zero = field.rfind("C420", 0) == 0;
+		}
+		start = end + 1;
+	}
+	if (owned->source_width <= 0 || owned->source_height <= 0 || owned->source_width % 2 != 0 ||
+	    owned->source_height % 2 != 0 || owned->source_width > 8192 || owned->source_height > 8192 || rate <= 0 ||
+	    scale <= 0 || !four_two_zero)
+	{
+		error = "the clip is not an even-sized 4:2:0 stream with a frame rate";
+		return false;
+	}
+
+	owned->target_width = width;
+	owned->target_height = height;
+	owned->frame_seconds = static_cast<double>(scale) / static_cast<double>(rate);
+	owned->buffer.resize(static_cast<size_t>(owned->source_width) * owned->source_height * 3 / 2);
+	state = owned.release();
+	return true;
+}
+
+bool clip_reader::read_y4m(video_frame& frame, double& seconds, std::string& error)
+{
+	std::string marker;
+	if (!read_line(state->y4m, marker)) return false;
+	if (marker.rfind("FRAME", 0) != 0)
+	{
+		error = "a frame of the clip has no FRAME marker";
+		return false;
+	}
+	if (std::fread(state->buffer.data(), 1, state->buffer.size(), state->y4m) != state->buffer.size())
+	{
+		error = "the clip's last frame is cut short";
+		return false;
+	}
+
+	// The middle of the frame at the capture's shape, as a camera of that shape would frame it.
+	const int sw = state->source_width;
+	const int sh = state->source_height;
+	const int tw = state->target_width;
+	const int th = state->target_height;
+	int crop_width = sw;
+	int crop_height = sh;
+	if (static_cast<int64_t>(sw) * th > static_cast<int64_t>(sh) * tw)
+		crop_width = static_cast<int>(static_cast<int64_t>(sh) * tw / th) & ~1;
+	else crop_height = static_cast<int>(static_cast<int64_t>(sw) * th / tw) & ~1;
+	const int left = (sw - crop_width) / 2 & ~1;
+	const int top = (sh - crop_height) / 2 & ~1;
+
+	const uint8_t* luma = state->buffer.data();
+	const uint8_t* cb = luma + static_cast<size_t>(sw) * sh;
+	const uint8_t* cr = cb + static_cast<size_t>(sw / 2) * (sh / 2);
+	frame.luma.resize(tw, th);
+	frame.cb.resize(tw / 2, th);
+	frame.cr.resize(tw / 2, th);
+	resample_plane(luma, sw, left, top, crop_width, crop_height, frame.luma);
+	resample_plane(cb, sw / 2, left / 2, top / 2, crop_width / 2, crop_height / 2, frame.cb);
+	resample_plane(cr, sw / 2, left / 2, top / 2, crop_width / 2, crop_height / 2, frame.cr);
+	seconds = state->frames++ * state->frame_seconds;
+	return true;
+}
 
 clip_reader::~clip_reader()
 {
@@ -474,6 +689,12 @@ void clip_reader::close()
 bool clip_reader::open(const std::wstring& path, const int width, const int height, std::string& error)
 {
 	close();
+	if (width <= 0 || height <= 0 || width % 2 != 0)
+	{
+		error = "a clip is replayed at an even width";
+		return false;
+	}
+	if (is_y4m(path)) return open_y4m(path, width, height, error);
 	auto owned = std::make_unique<impl>();
 
 	// The advanced processor converts whatever the clip holds to the wanted size and format.
@@ -527,6 +748,7 @@ bool clip_reader::read(video_frame& frame, double& seconds, std::string& error)
 		error = "no clip is open";
 		return false;
 	}
+	if (state->y4m != nullptr) return read_y4m(frame, seconds, error);
 
 	for (;;)
 	{
@@ -570,4 +792,61 @@ bool clip_reader::read(video_frame& frame, double& seconds, std::string& error)
 		seconds = static_cast<double>(timestamp) / 10000000.0;
 		return true;
 	}
+}
+
+bool load_still(const std::wstring& path, const int width, const int height, video_frame& frame)
+{
+	if (width <= 0 || height <= 0 || width % 2 != 0) return false;
+
+	ComPtr<IWICImagingFactory> factory;
+	ComPtr<IWICBitmapDecoder> decoder;
+	ComPtr<IWICBitmapFrameDecode> source;
+	ComPtr<IWICBitmapScaler> scaler;
+	ComPtr<IWICFormatConverter> converter;
+	if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))))
+		return false;
+	if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
+	                                              &decoder)))
+		return false;
+	if (FAILED(decoder->GetFrame(0, &source))) return false;
+	if (FAILED(factory->CreateBitmapScaler(&scaler))) return false;
+	if (FAILED(scaler->Initialize(source.Get(), static_cast<UINT>(width), static_cast<UINT>(height),
+	                              WICBitmapInterpolationModeFant)))
+		return false;
+	if (FAILED(factory->CreateFormatConverter(&converter))) return false;
+	if (FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0,
+	                                 WICBitmapPaletteTypeCustom)))
+		return false;
+
+	std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4);
+	if (FAILED(converter->CopyPixels(nullptr, static_cast<UINT>(width) * 4, static_cast<UINT>(pixels.size()),
+	                                 pixels.data())))
+		return false;
+
+	const auto clamp_byte = [](const int value)
+	{
+		return static_cast<uint8_t>(std::clamp(value, 0, 255));
+	};
+	frame.luma.resize(width, height);
+	frame.cb.resize(width / 2, height);
+	frame.cr.resize(width / 2, height);
+	for (int y = 0; y < height; ++y)
+		for (int x = 0; x < width; x += 2)
+		{
+			int cb_sum = 0;
+			int cr_sum = 0;
+			for (int offset = 0; offset < 2; ++offset)
+			{
+				const uint8_t* pixel = pixels.data() + (static_cast<size_t>(y) * width + x + offset) * 4;
+				const int blue = pixel[0];
+				const int green = pixel[1];
+				const int red = pixel[2];
+				frame.luma(x + offset, y) = clamp_byte(16 + ((66 * red + 129 * green + 25 * blue + 128) >> 8));
+				cb_sum += 128 + ((-38 * red - 74 * green + 112 * blue + 128) >> 8);
+				cr_sum += 128 + ((112 * red - 94 * green - 18 * blue + 128) >> 8);
+			}
+			frame.cb(x / 2, y) = clamp_byte(cb_sum / 2);
+			frame.cr(x / 2, y) = clamp_byte(cr_sum / 2);
+		}
+	return true;
 }

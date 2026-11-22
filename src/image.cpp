@@ -1,5 +1,6 @@
 #include "image.h"
 
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -153,6 +154,88 @@ void resize_bilinear(const image_u8& src, image_u8& dst)
 			const int top = r0[x0] + (((r0[x1] - r0[x0]) * fx) >> 16);
 			const int bottom = r1[x0] + (((r1[x1] - r1[x0]) * fx) >> 16);
 			out[x] = clamp_u8(top + (((bottom - top) * fy) >> 16));
+		}
+	}
+}
+
+namespace
+{
+	// Catmull-Rom taps along one axis: for every output position, the first of the four source
+	// positions around it, and their weights in 256ths, which sum to exactly 256.
+	struct bicubic_taps
+	{
+		std::vector<int> first;
+		std::vector<std::array<int, 4>> weights;
+	};
+
+	bicubic_taps make_bicubic_taps(const int source_size, const int target_size)
+	{
+		bicubic_taps taps;
+		taps.first.resize(static_cast<size_t>(target_size));
+		taps.weights.resize(static_cast<size_t>(target_size));
+		const double ratio = static_cast<double>(source_size) / target_size;
+		for (int i = 0; i < target_size; ++i)
+		{
+			const double position = (i + 0.5) * ratio - 0.5;
+			const double base = std::floor(position);
+			const double t = position - base;
+			const double weight[4] = {((-0.5 * t + 1.0) * t - 0.5) * t, (1.5 * t - 2.5) * t * t + 1.0,
+			                          ((-1.5 * t + 2.0) * t + 0.5) * t, (0.5 * t - 0.5) * t * t};
+			auto& fixed = taps.weights[static_cast<size_t>(i)];
+			int sum = 0;
+			int largest = 0;
+			for (int k = 0; k < 4; ++k)
+			{
+				fixed[static_cast<size_t>(k)] = static_cast<int>(std::lround(weight[k] * 256.0));
+				sum += fixed[static_cast<size_t>(k)];
+				if (fixed[static_cast<size_t>(k)] > fixed[static_cast<size_t>(largest)]) largest = k;
+			}
+			fixed[static_cast<size_t>(largest)] += 256 - sum;
+			taps.first[static_cast<size_t>(i)] = static_cast<int>(base) - 1;
+		}
+		return taps;
+	}
+}
+
+void resize_bicubic(const image_u8& src, image_u8& dst)
+{
+	const int sw = src.width();
+	const int sh = src.height();
+	const int dw = dst.width();
+	const int dh = dst.height();
+	if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+
+	const bicubic_taps columns = make_bicubic_taps(sw, dw);
+	const bicubic_taps rows = make_bicubic_taps(sh, dh);
+
+	// Rows first, kept at 256 times scale, then columns over them.
+	std::vector<int> horizontal(static_cast<size_t>(dw) * static_cast<size_t>(sh));
+	for (int y = 0; y < sh; ++y)
+	{
+		const uint8_t* in = src.row(y);
+		int* out = horizontal.data() + static_cast<size_t>(y) * dw;
+		for (int x = 0; x < dw; ++x)
+		{
+			const auto& weight = columns.weights[static_cast<size_t>(x)];
+			const int first = columns.first[static_cast<size_t>(x)];
+			int sum = 0;
+			for (int k = 0; k < 4; ++k) sum += weight[static_cast<size_t>(k)] * in[std::clamp(first + k, 0, sw - 1)];
+			out[x] = sum;
+		}
+	}
+	for (int y = 0; y < dh; ++y)
+	{
+		const auto& weight = rows.weights[static_cast<size_t>(y)];
+		const int first = rows.first[static_cast<size_t>(y)];
+		const int* taps[4];
+		for (int k = 0; k < 4; ++k)
+			taps[k] = horizontal.data() + static_cast<size_t>(std::clamp(first + k, 0, sh - 1)) * dw;
+		uint8_t* out = dst.row(y);
+		for (int x = 0; x < dw; ++x)
+		{
+			const int sum = weight[0] * taps[0][x] + weight[1] * taps[1][x] + weight[2] * taps[2][x] +
+			                weight[3] * taps[3][x];
+			out[x] = clamp_u8(sum <= 0 ? 0 : (sum + 32768) >> 16);
 		}
 	}
 }

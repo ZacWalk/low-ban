@@ -164,10 +164,10 @@ void engine::capture_loop(const int width, const int height)
 				if (recording_.load() && !clip.is_open())
 				{
 					std::string clip_error;
-					if (clip.open(new_clip_path(clip_name), frame->width(), frame->height(), geometry_hz, clip_error))
+					if (clip.open(new_clip_path(clip_name), frame->width(), frame->height(), packet_hz, clip_error))
 					{
 						next_clip_frame = seconds;
-						set_status("recording samples\\" + narrow(clip_name) + " - File > Record clip to stop");
+						set_status("recording samples\\" + narrow(clip_name) + " - press Record clip again to stop");
 					}
 					else
 					{
@@ -191,8 +191,8 @@ void engine::capture_loop(const int width, const int height)
 						recording_.store(false);
 						set_status("recording stopped: " + clip_error);
 					}
-					next_clip_frame += 1.0 / geometry_hz;
-					if (next_clip_frame <= seconds) next_clip_frame = seconds + 1.0 / geometry_hz;
+					next_clip_frame += 1.0 / packet_hz;
+					if (next_clip_frame <= seconds) next_clip_frame = seconds + 1.0 / packet_hz;
 				}
 
 				std::lock_guard<std::mutex> guard(source_mutex);
@@ -222,16 +222,7 @@ void engine::analysis_loop()
 	const bool com_ready = SUCCEEDED(com) || com == RPC_E_CHANGED_MODE;
 
 	{
-		// The model is tens of megabytes, so it is loaded here rather than making the window
-		// wait for it. Only this thread ever touches the predictor.
-		std::string error;
-		if (!landmarks.load(asset_path(L"shape_predictor_68_face_landmarks.dat"), error))
-		{
-			set_status("landmark model unavailable: " + error);
-		}
-
 		frame_rate rate;
-		face_tracker tracker;
 		call_session session;
 		std::shared_ptr<const video_frame> previous;
 		std::string baseline_status;
@@ -254,14 +245,12 @@ void engine::analysis_loop()
 
 			const double seconds = seconds_since(started);
 			face_analysis faces;
-			if (show_faces()) faces = tracker.analyse(detector, show_landmarks() ? &landmarks : nullptr, *frame);
-			else tracker.reset();
+			if (show_faces()) faces = analyse_faces(detector, frame->luma);
 
 			auto state = std::make_shared<render_state>();
 			yuv_to_bgra(*frame, state->source_bgra);
 			session_options options;
-			options.landmark_overlay = show_overlay();
-			session.process(*frame, seconds, faces, landmarks.loaded() ? &landmarks : nullptr, options, *state);
+			session.process(*frame, seconds, faces, &detector, options, *state);
 
 			// A missing baseline is worth one status line, not one per frame.
 			if (state->baseline_status != baseline_status)

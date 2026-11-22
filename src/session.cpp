@@ -1,9 +1,7 @@
 #include "session.h"
 
 #include <algorithm>
-
-#include "draw.h"
-#include "warp.h"
+#include <cmath>
 
 namespace
 {
@@ -13,14 +11,8 @@ namespace
 	// 15 Hz instead of slipping to every third frame.
 	constexpr double clock_slack_seconds = 0.008;
 
-	constexpr uint8_t overlay_colour = 0;
-
-	int overlap_area(const rect_i& a, const rect_i& b)
-	{
-		const int w = std::min(a.right, b.right) - std::max(a.left, b.left) + 1;
-		const int h = std::min(a.bottom, b.bottom) - std::max(a.top, b.top) + 1;
-		return w > 0 && h > 0 ? w * h : 0;
-	}
+	constexpr double tick_seconds = 1.0 / packet_hz;
+	constexpr double bucket_bytes_per_tick = call_kbit_per_second * 1000.0 / 8.0 / packet_hz;
 
 	int floor_div(const int value, const int divisor)
 	{
@@ -28,27 +20,9 @@ namespace
 		return quotient * divisor > value ? quotient - 1 : quotient;
 	}
 
-	// Landmarks found in a received picture, from the same boxes the source was landmarked
-	// with, against the source's own landmarks. Averaged over the faces.
-	bool measure_expression(const shape_predictor& predictor, const image_u8& picture, const face_analysis& faces,
-	                        landmark_error& error)
+	point_f eye_centre(const std::vector<point_i>& points)
 	{
-		if (picture.empty()) return false;
-		landmark_error total;
-		int measured = 0;
-		for (size_t i = 0; i < faces.landmarks.size(); ++i)
-		{
-			landmark_error face_error;
-			if (!compare_landmarks(faces.landmarks[i], predictor.predict(picture, faces.landmarked[i]), face_error))
-				continue;
-			total.overall += face_error.overall;
-			total.mouth += face_error.mouth;
-			++measured;
-		}
-		if (measured == 0) return false;
-		error.overall = total.overall / measured;
-		error.mouth = total.mouth / measured;
-		return true;
+		return {(points[eye_left].x + points[eye_right].x) / 2.0f, (points[eye_left].y + points[eye_right].y) / 2.0f};
 	}
 }
 
@@ -63,47 +37,70 @@ rect_i coded_box(const rect_i& box)
 	        floor_div(box.bottom, coded_scale)};
 }
 
-void face_tracker::reset()
+face_geometry coded_geometry(const face_geometry& faces)
 {
-	tracked.clear();
+	face_geometry result = faces;
+	for (auto& face : result)
+		for (auto& point : face)
+		{
+			point.x = static_cast<int>(std::lround(point.x / static_cast<double>(coded_scale)));
+			point.y = static_cast<int>(std::lround(point.y / static_cast<double>(coded_scale)));
+		}
+	return result;
 }
 
-face_analysis face_tracker::analyse(const face_detector& detector, const shape_predictor* predictor,
-                                    const video_frame& frame)
+face_analysis analyse_faces(face_detector& detector, const image_u8& luma)
 {
 	face_analysis result;
-	face_detection detected = detector.detect(frame);
-	result.peak_confidence = detected.peak_confidence;
-	result.boxes = std::move(detected.faces);
-
-	// Prefer a box refined from the previous frame's landmarks: the detector is coarse, but
-	// the model tells us exactly where it wants the box to be.
-	for (auto& box : result.boxes)
-		for (const auto& t : tracked)
-			if (overlap_area(box, t) * 2 > box.width() * box.height())
-			{
-				box = t;
-				break;
-			}
-	tracked.clear();
-
-	if (predictor == nullptr || !predictor->loaded()) return result;
-	for (const auto& box : result.boxes)
+	for (detected_face& face : detector.detect(luma))
 	{
-		std::vector<point_i> parts = predictor->predict(frame.luma, box);
-		if (parts.size() != 68) continue;
-
-		// Only trust the refinement if it stayed near the box it came from, so a bad
-		// prediction cannot drag the tracker away frame after frame.
-		const rect_i refined = predictor->box_from_parts(parts);
-		if (!refined.empty() && refined.width() * 2 > box.width() && refined.width() < box.width() * 2 &&
-		    overlap_area(refined, box) * 2 > box.width() * box.height())
-			tracked.push_back(refined);
-
-		result.landmarked.push_back(box);
-		result.landmarks.push_back(std::move(parts));
+		result.confidence = std::max(result.confidence, face.confidence);
+		result.boxes.push_back(face.box);
+		result.points.push_back(std::move(face.points));
 	}
 	return result;
+}
+
+bool measure_expression(face_detector& detector, const image_u8& picture, const face_analysis& faces,
+                        landmark_error& error)
+{
+	if (picture.empty() || faces.points.empty()) return false;
+	const std::vector<detected_face> found = detector.detect(picture);
+	landmark_error total;
+	int measured = 0;
+	for (const auto& source : faces.points)
+	{
+		if (source.size() != face_point_count) continue;
+		const double spacing = std::hypot(static_cast<double>(source[eye_right].x - source[eye_left].x),
+		                                  static_cast<double>(source[eye_right].y - source[eye_left].y));
+		if (spacing < min_scored_eye_spacing) continue;
+
+		// The received face whose eyes are nearest the source's, within half their spacing.
+		const point_f centre = eye_centre(source);
+		const detected_face* nearest = nullptr;
+		double nearest_distance = spacing / 2.0;
+		for (const detected_face& face : found)
+		{
+			if (face.points.size() != face_point_count) continue;
+			const point_f other = eye_centre(face.points);
+			const double distance = std::hypot(other.x - centre.x, other.y - centre.y);
+			if (distance <= nearest_distance)
+			{
+				nearest_distance = distance;
+				nearest = &face;
+			}
+		}
+
+		landmark_error face_error{1.0, 1.0};
+		if (nearest != nullptr) compare_landmarks(source, nearest->points, face_error);
+		total.overall += face_error.overall;
+		total.mouth += face_error.mouth;
+		++measured;
+	}
+	if (measured == 0) return false;
+	error.overall = total.overall / measured;
+	error.mouth = total.mouth / measured;
+	return true;
 }
 
 void call_session::rolling_rate::add(const double seconds, const int64_t bits)
@@ -138,20 +135,18 @@ bool call_session::due(clock& schedule, const double seconds, const double inter
 
 void call_session::reset()
 {
-	geometry_clock = {};
-	picture_clock = {};
+	tick_clock = {};
 	smoother.reset();
 
-	geometry_wire.reset();
-	picture_wire.reset();
-	received_geometry.clear();
-	picture_started = false;
-	animation_stale = false;
+	lowban.reset();
+	lowban_started = false;
+	lowban_tokens = 0.0;
+	lowban_quality = startup_quality;
 	lowban_shown = {};
 	lowban_updated_blocks = 0;
 	lowban_keyframe = false;
 	lowban_warped = false;
-	lowban_picture_rate.reset();
+	lowban_rate.reset();
 	lowban_geometry_rate.reset();
 	lowban_header_rate.reset();
 
@@ -166,54 +161,59 @@ void call_session::reset()
 	sums = {};
 }
 
-void call_session::send_geometry(const face_geometry& smoothed, const double seconds)
+void call_session::send_lowban(const image_u8& coded, const image_u8& coded_importance, const face_geometry& faces,
+                               const double seconds)
 {
-	// The first packet is a keyframe; after that the stream sends one itself whenever the
-	// number of faces changes.
-	const landmark_packet packet = geometry_wire.encode(smoothed, sums.lowban_geometry_packets == 0);
-	if (packet.bytes.empty()) return;
+	// The startup keyframe is the whole scene, whatever it costs. After it, every tick adds
+	// the call rate's share to a bucket that can save up one capped packet, and a packet
+	// spends what the bucket holds: a still scene sends little or nothing and banks the rest
+	// for the next movement.
+	const bool startup = !lowban_started;
+	if (!startup)
+		lowban_tokens = std::min(lowban_tokens + bucket_bytes_per_tick, static_cast<double>(packet_cap_bytes));
+	const size_t budget = startup ? 0 : std::max<size_t>(1, static_cast<size_t>(std::max(0.0, lowban_tokens)));
+	const lowban_packet packet = lowban.encode(coded, &coded_importance, faces, startup, budget, lowban_quality);
 
-	face_geometry decoded = received_geometry;
-	if (!geometry_wire.decode(packet, decoded)) return;
-	received_geometry = std::move(decoded);
-	animation_stale = true;
-
-	lowban_geometry_rate.add(seconds, static_cast<int64_t>(packet.bytes.size()) * 8);
-	lowban_header_rate.add(seconds, packet_header_bytes * 8);
-	sums.lowban_geometry_bytes += static_cast<int64_t>(packet.bytes.size());
-	++sums.lowban_geometry_packets;
-}
-
-void call_session::send_picture(const image_u8& coded, const image_u8& coded_importance, const double seconds)
-{
-	// The encoder has to predict from exactly the geometry the receiver holds: what the
-	// geometry stream has sent, not what the tracker found.
-	const bool startup = !picture_started;
-	const transform_packet packet = picture_wire.encode(codec, coded, &coded_importance, startup,
-	                                                    startup ? 0 : picture_packet_budget,
-	                                                    scale_geometry(geometry_wire.transmitted(), coded_scale));
+	// The quality follows the bucket a step a tick: coarser while macroblocks worth sending are
+	// left for want of bytes and the bucket is all but dry, finer while nothing is left and it fills.
+	const auto spent = static_cast<double>(packet.bytes.size());
+	if (!startup)
+	{
+		if (packet.limited && lowban_tokens - spent < bucket_bytes_per_tick)
+			lowban_quality = std::min(coarsest_quality, lowban_quality + 1);
+		else if (!packet.limited && lowban_tokens - spent > packet_cap_bytes / 2.0)
+			lowban_quality = std::max(finest_quality, lowban_quality - 1);
+	}
 	if (packet.bytes.empty()) return;
 
 	image_u8 decoded;
-	if (!picture_wire.decode(codec, packet, coded.width(), coded.height(), decoded,
-	                         scale_geometry(received_geometry, coded_scale)))
-		return;
-	picture_started = true;
-	animation_stale = true;
+	if (!lowban.decode(packet, decoded)) return;
+	lowban_started = true;
 	lowban_updated_blocks = packet.updated_blocks;
 	lowban_keyframe = packet.keyframe;
 	lowban_warped = packet.warped;
 
-	const auto size = static_cast<int64_t>(packet.bytes.size());
-	lowban_picture_rate.add(seconds, size * 8);
-	lowban_header_rate.add(seconds, packet_header_bytes * 8);
-	if (packet.keyframe) sums.lowban_keyframe_bytes += size;
-	else
+	image_u8 coded_shown;
+	if (lowban.show(coded_shown))
 	{
-		sums.lowban_picture_bytes += size;
-		sums.lowban_largest_picture_delta = std::max(sums.lowban_largest_picture_delta, packet.bytes.size());
+		lowban_shown.resize(frame_width, frame_height);
+		resize_bicubic(coded_shown, lowban_shown);
 	}
-	++sums.lowban_picture_packets;
+
+	const auto size = static_cast<int64_t>(packet.bytes.size());
+	lowban_rate.add(seconds, size * 8);
+	lowban_geometry_rate.add(seconds, static_cast<int64_t>(packet.geometry_bytes) * 8);
+	lowban_header_rate.add(seconds, packet_header_bytes * 8);
+	if (startup)
+	{
+		sums.lowban_startup_bytes = size;
+		return;
+	}
+	lowban_tokens -= static_cast<double>(size);
+	sums.lowban_bytes += size;
+	sums.lowban_geometry_bytes += static_cast<int64_t>(packet.geometry_bytes);
+	sums.lowban_largest_packet = std::max(sums.lowban_largest_packet, packet.bytes.size());
+	++sums.lowban_packets;
 	if (packet.warped) ++sums.lowban_warped_packets;
 }
 
@@ -226,8 +226,8 @@ void call_session::send_baseline(const image_u8& coded, const face_analysis& fac
 		h264_settings settings;
 		settings.width = coded.width();
 		settings.height = coded.height();
-		settings.frames_per_second = geometry_hz;
-		settings.kbit_per_second = baseline_kbit_per_second;
+		settings.frames_per_second = packet_hz;
+		settings.kbit_per_second = call_kbit_per_second;
 		settings.face_offset = options.baseline_face_offset ? baseline_face_offset : 0;
 		std::string error;
 		if (!baseline.open(settings, error)) baseline_status = "H.264 baseline unavailable: " + error;
@@ -236,8 +236,8 @@ void call_session::send_baseline(const image_u8& coded, const face_analysis& fac
 
 	// The same faces the importance map is built from, at the coded size.
 	std::vector<rect_i> boxes;
-	boxes.reserve(faces.landmarked.size());
-	for (const rect_i& box : faces.landmarked) boxes.push_back(coded_box(box));
+	boxes.reserve(faces.boxes.size());
+	for (const rect_i& box : faces.boxes) boxes.push_back(coded_box(box));
 
 	std::vector<uint8_t> bytes;
 	std::string error;
@@ -259,12 +259,12 @@ void call_session::send_baseline(const image_u8& coded, const face_analysis& fac
 	if (!baseline_decoded.empty())
 	{
 		baseline_shown.resize(frame_width, frame_height);
-		resize_bilinear(baseline_decoded, baseline_shown);
+		resize_bicubic(baseline_decoded, baseline_shown);
 	}
 }
 
 void call_session::process(const video_frame& frame, const double seconds, const face_analysis& faces,
-                           const shape_predictor* predictor, const session_options& options, render_state& state)
+                           face_detector* measure, const session_options& options, render_state& state)
 {
 	const int width = frame.width();
 	const int height = frame.height();
@@ -278,73 +278,50 @@ void call_session::process(const video_frame& frame, const double seconds, const
 
 	// The sender's view: face importance from the landmarks, then everything at the coded size.
 	image_u8 importance(width, height);
-	importance.fill(32);
-	for (size_t i = 0; i < faces.landmarks.size(); ++i)
-		add_face_importance(importance, faces.landmarked[i], faces.landmarks[i]);
+	importance.fill(background_importance);
+	for (size_t i = 0; i < faces.boxes.size() && i < faces.points.size(); ++i)
+		add_face_importance(importance, faces.boxes[i], faces.points[i]);
 	image_u8 coded(width / coded_scale, height / coded_scale);
 	resize_bilinear(frame.luma, coded);
 	image_u8 coded_importance(coded.width(), coded.height());
 	resize_bilinear(importance, coded_importance);
-	const face_geometry smoothed = smoother.apply(faces.landmarks, seconds);
+	const face_geometry smoothed = smoother.apply(faces.points, seconds);
 
-	// Geometry first, so a picture packet on the same tick predicts from the newest landmarks.
-	if (due(geometry_clock, seconds, 1.0 / geometry_hz))
+	if (due(tick_clock, seconds, tick_seconds))
 	{
-		send_geometry(smoothed, seconds);
+		++sums.ticks;
+		send_lowban(coded, coded_importance, coded_geometry(smoothed), seconds);
 		send_baseline(coded, faces, seconds, options);
-	}
-	if (due(picture_clock, seconds, picture_interval_seconds)) send_picture(coded, coded_importance, seconds);
-
-	// The low-ban receiver shows its last picture with the face warped onto the newest
-	// geometry, so expression moves at the geometry rate rather than the picture rate.
-	if (animation_stale)
-	{
-		image_u8 coded_shown;
-		if (picture_wire.animate(scale_geometry(received_geometry, coded_scale), coded_shown))
-		{
-			lowban_shown.resize(width, height);
-			resize_bilinear(coded_shown, lowban_shown);
-		}
-		animation_stale = false;
 	}
 
 	state.width = width;
 	state.height = height;
 	state.faces = faces.boxes;
 	state.face_count = static_cast<int>(faces.boxes.size());
-	state.peak_confidence = faces.peak_confidence;
+	state.confidence = faces.confidence;
 
-	const bool can_measure_expression = predictor != nullptr && predictor->loaded();
 	const auto receive = [&](receiver_view& view, const image_u8& shown)
 	{
 		view.picture = shown;
 		view.quality = measure_quality(frame.luma, shown, &importance);
-		view.expression_measured = can_measure_expression &&
-		                           measure_expression(*predictor, shown, faces, view.expression);
+		view.expression_measured = measure != nullptr && measure_expression(*measure, shown, faces, view.expression);
 	};
 	receive(state.lowban, lowban_shown);
 	receive(state.baseline, baseline_shown);
 
-	const double geometry_tick = 1.0 / geometry_hz;
 	const double audio = audio_link_kbit_per_second();
-	const double picture_bits = lowban_picture_rate.bits_per_second(seconds, picture_interval_seconds);
-	const double geometry_bits = lowban_geometry_rate.bits_per_second(seconds, geometry_tick);
-	state.lowban.payload_kbit_per_second = (picture_bits + geometry_bits) / 1000.0;
+	state.lowban.payload_kbit_per_second = lowban_rate.bits_per_second(seconds, tick_seconds) / 1000.0;
 	state.lowban.link_kbit_per_second = state.lowban.payload_kbit_per_second +
-	                                    lowban_header_rate.bits_per_second(seconds, geometry_tick) / 1000.0 + audio;
-	state.lowban_geometry_kbit_per_second = geometry_bits / 1000.0;
+	                                    lowban_header_rate.bits_per_second(seconds, tick_seconds) / 1000.0 + audio;
+	state.lowban_geometry_kbit_per_second = lowban_geometry_rate.bits_per_second(seconds, tick_seconds) / 1000.0;
 	state.lowban_updated_blocks = lowban_updated_blocks;
+	state.lowban_quality = lowban_quality;
 	state.lowban_keyframe = lowban_keyframe;
 	state.lowban_warped = lowban_warped;
 
-	state.baseline.payload_kbit_per_second = baseline_rate.bits_per_second(seconds, geometry_tick) / 1000.0;
+	state.baseline.payload_kbit_per_second = baseline_rate.bits_per_second(seconds, tick_seconds) / 1000.0;
 	state.baseline.link_kbit_per_second = state.baseline.payload_kbit_per_second +
-	                                      baseline_header_rate.bits_per_second(seconds, geometry_tick) / 1000.0 + audio;
+	                                      baseline_header_rate.bits_per_second(seconds, tick_seconds) / 1000.0 + audio;
 	state.baseline_face_offset = baseline.face_offset_active();
 	state.baseline_status = baseline_status;
-
-	// Drawn after measuring, so the overlay never counts as picture quality. Only geometry
-	// this receiver actually decoded is drawn; the baseline receives none.
-	if (options.landmark_overlay && !state.lowban.picture.empty())
-		for (const auto& parts : received_geometry) draw_face(state.lowban.picture, parts, overlay_colour);
 }

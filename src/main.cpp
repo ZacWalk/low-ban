@@ -1,18 +1,19 @@
-// low-ban - low bandwidth video with face landmarking.
+// low-ban - low bandwidth video that spends its bits on faces.
 //
-// The window is deliberately thin: a libdesktop ui::shell owns the frame, menu bar and
-// event loop, this file adds the menus and the presentation, and none of it does image
-// processing. Everything else lives in engine/session and the modules below.
+// The window is deliberately thin: a libdesktop ui::shell owns the frame and event loop, this
+// file adds two buttons over the presentation, and none of it does image processing. Everything
+// else lives in engine/session and the modules below.
 //
 // Command line:
 //   /test         run the headless self test and exit with a non-zero code on failure
-//   /evaluate     score samples/*.png and samples/*.mp4 offline and print CSV
+//   /evaluate     score samples/*.png, samples/*.mp4 and samples/*.y4m offline and print CSV
 //   /probe-h264   one H.264 round trip, run as a child to find out whether it crashes
 #include "libdesktop/ui/shell.h"
 #include "libdesktop/ui/test_support.h"
 #include "libdesktop/render/software.h"
 
 #include <algorithm>
+#include <any>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -42,9 +43,11 @@ namespace
 	// line long enough to run into the next pane's caption.
 	constexpr int label_height = 24;
 	constexpr int caption_lines = 3;
-	// The drawn menu consumes client pixels; its 20-pixel line and 8-pixel padding scale with the
-	// opening display, unlike the physical pane dimensions below.
-	constexpr int menu_bar_height_96 = 28;
+	// The buttons above the panes consume client pixels; their fixed extent and the bar's padding
+	// scale with the opening display, unlike the physical pane dimensions below.
+	constexpr int button_width_96 = 128;
+	constexpr int button_height_96 = 28;
+	constexpr int button_bar_padding_96 = 4;
 
 	// The title sits a third of the way down the space above the panes and the status line
 	// three paddings above the bottom. This much space above the panes keeps the title clear
@@ -89,15 +92,15 @@ namespace
 	render::font_face title_font = render::font_face::title;
 	render::font_face label_font = render::font_face::dialog;
 
-	int menu_bar_height_for_scale(const double scale)
+	int button_bar_height_for_scale(const double scale)
 	{
-		return core::round(menu_bar_height_96 * scale);
+		return core::round(button_height_96 * scale) + 2 * core::round(button_bar_padding_96 * scale);
 	}
 
-	core::sizei minimum_client_size(const double menu_scale = 1.0)
+	core::sizei minimum_client_size(const double bar_scale = 1.0)
 	{
 		return {video_width * 3 + layout_padding * 4,
-		        video_height + minimum_pane_y * 2 + menu_bar_height_for_scale(menu_scale)};
+		        video_height + minimum_pane_y * 2 + button_bar_height_for_scale(bar_scale)};
 	}
 
 	core::sizei initial_client_size()
@@ -107,7 +110,7 @@ namespace
 		return {video_width * 3 + layout_padding * 8, video_height + minimum_pane_y * 2 + 60};
 	}
 
-	// The shell takes sizes at 100% and scales them with the display, as the menu bar grows, but
+	// The shell takes sizes at 100% and scales them with the display, as the button bar grows, but
 	// the panes stay one pixel to a pixel; a physical size is divided by the scale, rounded up so
 	// the shell's rounding cannot lose a pixel of it.
 	core::sizei shell_size(const core::sizei physical, const double scale)
@@ -117,7 +120,7 @@ namespace
 
 	ui::shell_options make_options()
 	{
-		// The scale the shell applies, which minimum_client_size gives the menu bar.
+		// The scale the shell applies, which minimum_client_size gives the button bar.
 		const double scale = std::max(96, platform::primary_screen_dpi()) / 96.0;
 		ui::shell_options options;
 		options.client_size = shell_size(initial_client_size(), scale);
@@ -317,7 +320,8 @@ namespace
 		const pane_layout layout{relative_layout.left_x + bounds.left, relative_layout.lowban_x + bounds.left,
 		                         relative_layout.baseline_x + bounds.left, relative_layout.pane_y + bounds.top};
 		draw_centred(draw, bounds, bounds.top + std::max(layout_padding, relative_layout.pane_y / 3),
-		             "Low bandwidth video with face landmarking", title_font, core::color(core::rgba(200, 200, 200)));
+		             "Low bandwidth video that spends its bits on faces", title_font,
+		             core::color(core::rgba(200, 200, 200)));
 
 		ensure_cache();
 		if (cache && cache->state)
@@ -333,19 +337,18 @@ namespace
 			                     {layout.baseline_x, layout.pane_y, layout.baseline_x + video_width,
 			                      layout.pane_y + video_height});
 
-			// Drawn over the source so detection can be judged separately from landmarking.
+			// Drawn over the source so detection can be judged separately from what reached the receivers.
 			for (const auto& face : state.faces) draw_face_box(draw, layout.left_x, layout.pane_y, face);
 
 			char text[192] = {};
 			std::snprintf(text, sizeof(text), "Original: %0.1f fps camera, %0.1f fps analysed", pipeline.source_fps(),
 			              pipeline.processed_fps());
 			draw_caption(draw, layout.left_x, layout.pane_y, 0, text, label_font);
-			std::snprintf(text, sizeof(text), "%d faces (peak detector score %0.2f)", state.face_count,
-			              state.peak_confidence);
+			std::snprintf(text, sizeof(text), "%d faces (best confidence %d%%)", state.face_count, state.confidence);
 			draw_caption(draw, layout.left_x, layout.pane_y, 1, text, label_font);
 
 			const receiver_view& lowban = state.lowban;
-			std::snprintf(text, sizeof(text), "low-ban: %0.1f kbit/s (%0.1f geometry), link %0.1f kbit/s",
+			std::snprintf(text, sizeof(text), "low-ban: %0.1f kbit/s (%0.1f landmarks), link %0.1f kbit/s",
 			              lowban.payload_kbit_per_second, state.lowban_geometry_kbit_per_second,
 			              lowban.link_kbit_per_second);
 			draw_caption(draw, layout.lowban_x, layout.pane_y, 0, text, label_font);
@@ -353,11 +356,11 @@ namespace
 			std::snprintf(text, sizeof(text), "PSNR %0.1f dB, face %0.1f dB, landmark error %s", lowban.quality.psnr,
 			              lowban.quality.weighted_psnr, lowban_expression.c_str());
 			draw_caption(draw, layout.lowban_x, layout.pane_y, 1, text, label_font);
-			std::snprintf(text, sizeof(text), "last picture: %s, %d blocks",
+			std::snprintf(text, sizeof(text), "last packet: %s, %d blocks, background quantiser %0.0f",
 			              state.lowban_keyframe ? "startup keyframe"
-			              : state.lowban_warped ? "warped delta"
+			              : state.lowban_warped ? "warped face"
 			                                    : "delta",
-			              state.lowban_updated_blocks);
+			              state.lowban_updated_blocks, 4.0 * std::exp2(state.lowban_quality / 6.0));
 			draw_caption(draw, layout.lowban_x, layout.pane_y, 2, text, label_font);
 
 			const receiver_view& baseline = state.baseline;
@@ -375,7 +378,7 @@ namespace
 				              baseline.quality.psnr, baseline.quality.weighted_psnr, baseline_expression.c_str());
 				draw_caption(draw, layout.baseline_x, layout.pane_y, 1, text, label_font);
 				std::snprintf(text, sizeof(text), "%d kbit/s constant rate, %d fps, face offset %s",
-				              baseline_kbit_per_second, geometry_hz, state.baseline_face_offset ? "on" : "off");
+				              call_kbit_per_second, packet_hz, state.baseline_face_offset ? "on" : "off");
 				draw_caption(draw, layout.baseline_x, layout.pane_y, 2, text, label_font);
 			}
 		}
@@ -387,74 +390,61 @@ namespace
 		}
 	}
 
-	ui::command_ptr make_toggle_command(const ui::element_host& host, const std::string_view text,
-	                                    const std::function<bool()>& read, const std::function<void()>& toggle)
+	// A button that flips a pipeline setting and shows as pressed while it is on. The command keeps
+	// how to read the setting, so the button can follow changes it did not make; `refresh` redraws
+	// whatever shows it.
+	ui::command_ptr make_toggle_command(const std::string_view text, const std::string_view tooltip,
+	                                    const std::function<bool()>& read, const std::function<void()>& toggle,
+	                                    const std::function<void()>& refresh)
 	{
 		auto command = std::make_shared<ui::command>();
 		command->text = text;
+		command->toolbar_text = text;
+		command->tooltip_text = tooltip;
 		command->checkable = true;
 		command->checked = read();
-		command->invoke = [&host, command, read, toggle]
+		command->opaque = read;
+		command->invoke = [weak = std::weak_ptr<ui::command>(command), read, toggle, refresh]
 		{
 			toggle();
-			command->checked = read();
-			host.frame()->invalidate();
+			if (const auto self = weak.lock()) self->checked = read();
+			refresh();
 		};
 		return command;
 	}
 
-	std::vector<ui::command_ptr> build_menu(const ui::element_host& host)
+	// The window's two buttons: recording a clip, which is what measures motion, and face
+	// priority, whose absence is the ablation - no faces, so no face weighting, no landmarks, no
+	// warp and no face offset for H.264.
+	std::vector<ui::command_ptr> make_buttons(const std::function<void()>& refresh)
 	{
-		auto file_record = make_toggle_command(host, "&Record clip", [] { return pipeline.recording(); },
-		                                       [] { pipeline.set_recording(!pipeline.recording()); });
-		auto file_exit = std::make_shared<ui::command>();
-		file_exit->text = "E&xit";
-		file_exit->invoke = [&host]
-		{
-			host.frame()->close();
-		};
+		return {make_toggle_command("Record clip", "Record the camera to samples\\clip-<time>.mp4 until pressed again",
+		                            [] { return pipeline.recording(); },
+		                            [] { pipeline.set_recording(!pipeline.recording()); }, refresh),
+		        make_toggle_command("Face priority", "Find faces and spend the scarce bits on them", []
+		{ return pipeline.show_faces(); }, [] { pipeline.set_show_faces(!pipeline.show_faces()); }, refresh)};
+	}
 
-		auto file_separator = std::make_shared<ui::command>();
-		auto file = std::make_shared<ui::command>();
-		file->text = "&File";
-		file->menu = [file_record, children = std::vector<ui::command_ptr>{file_record, file_separator, file_exit}]
+	// Recording stops on its own after a camera or file error. True when a button changed.
+	bool sync_buttons(const std::vector<ui::command_ptr>& buttons)
+	{
+		bool changed = false;
+		for (const auto& button : buttons)
 		{
-			// Capture can stop a clip after an I/O or camera error, so the check belongs to
-			// menu construction rather than to the last UI click.
-			file_record->checked = pipeline.recording();
-			return children;
-		};
+			const auto* const read = std::any_cast<std::function<bool()>>(&button->opaque);
+			if (read == nullptr) continue;
+			const bool on = (*read)();
+			changed = changed || button->checked != on;
+			button->checked = on;
+		}
+		return changed;
+	}
 
-		auto view_detect = make_toggle_command(host, "Face &detect", [] { return pipeline.show_faces(); },
-		                                       [] { pipeline.set_show_faces(!pipeline.show_faces()); });
-		auto view_landmark = make_toggle_command(host, "Face &landmarking", [] { return pipeline.show_landmarks(); },
-		                                         [] { pipeline.set_show_landmarks(!pipeline.show_landmarks()); });
-		auto view_overlay = make_toggle_command(host, "Landmark &overlay", [] { return pipeline.show_overlay(); },
-		                                        [] { pipeline.set_show_overlay(!pipeline.show_overlay()); });
-		auto view = std::make_shared<ui::command>();
-		view->text = "&View";
-		view->menu = [children = std::vector<ui::command_ptr>{view_detect, view_landmark, view_overlay}]
-		{
-			return children;
-		};
-
-		auto about = std::make_shared<ui::command>();
-		about->text = "&About ...";
-		about->invoke = []
-		{
-			platform::message_box(nullptr,
-			                      "low-ban - low bandwidth video experiment\n\nLandmark-warped codec against H.264.",
-			                      "About low-ban",
-			                      {platform::message_box_buttons::ok, platform::message_box_icon::info});
-		};
-		auto help = std::make_shared<ui::command>();
-		help->text = "&Help";
-		help->menu = [children = std::vector<ui::command_ptr>{about}]
-		{
-			return children;
-		};
-
-		return {file, view, help};
+	ui::toolbar_ptr make_button_bar(const std::vector<ui::command_ptr>& buttons)
+	{
+		ui::toolbar_styles style;
+		style.button_extent = {button_width_96, button_height_96};
+		return ui::make_toolbar(style, buttons);
 	}
 
 	class recording_frame final : public ui::null_frame
@@ -515,7 +505,7 @@ namespace
 		state->baseline_status = "H.264 unavailable";
 		state->faces.push_back(rect_i::from_size(0, 0, 1, 1));
 		state->face_count = 1;
-		state->peak_confidence = 0.5f;
+		state->confidence = 90;
 		return state;
 	}
 
@@ -564,12 +554,13 @@ namespace
 		          "Segoe UI cell fonts retain the old 48/24 pixel cell requests and measured line heights", failures);
 
 		const core::sizei minimum = minimum_client_size();
-		gui_check(minimum == core::sizei(1968, 720 + menu_bar_height_for_scale(1.0)),
-		          "minimum client size leaves room for the drawn menu and all captions at 100%", failures);
+		gui_check(minimum == core::sizei(1968, 720 + button_bar_height_for_scale(1.0)) &&
+		              button_bar_height_for_scale(1.0) == 36,
+		          "minimum client size leaves room for the buttons and all captions at 100%", failures);
 		const core::sizei scaled_minimum = minimum_client_size(1.5);
-		gui_check(scaled_minimum == core::sizei(1968, 720 + menu_bar_height_for_scale(1.5)) &&
-		              menu_bar_height_for_scale(1.5) == 42,
-		          "minimum client size grows with a scaled menu bar", failures);
+		gui_check(scaled_minimum == core::sizei(1968, 720 + button_bar_height_for_scale(1.5)) &&
+		              button_bar_height_for_scale(1.5) == 54,
+		          "minimum client size grows with a scaled button bar", failures);
 
 		// The shell multiplies the sizes it is given by the display scale and rounds.
 		bool shell_sizes_kept = true;
@@ -585,7 +576,7 @@ namespace
 		gui_check(shell_sizes_kept, "the shell's display scaling keeps every physical pixel of the client sizes",
 		          failures);
 
-		const core::sizei content_minimum{minimum.cx, minimum.cy - menu_bar_height_for_scale(1.0)};
+		const core::sizei content_minimum{minimum.cx, minimum.cy - button_bar_height_for_scale(1.0)};
 		const pane_layout minimum_layout = compute_layout(content_minimum);
 		gui_check(minimum_layout.left_x == layout_padding && minimum_layout.lowban_x == 664 &&
 		              minimum_layout.baseline_x == 1316 && minimum_layout.pane_y == minimum_pane_y,
@@ -641,7 +632,23 @@ namespace
 		// The H.264 pane has no picture while its encoder is unavailable, so two panes draw one.
 		gui_check(draw.texture_calls == 2 && draw.lines.size() >= 4 && has_recorded_text(draw, "low-ban:") &&
 		              has_recorded_text(draw, "H.264 unavailable") && has_recorded_text(draw, "camera unavailable"),
-		          "captions, face overlay and status share one render draw_context paint", failures);
+		          "captions, face boxes and status share one render draw_context paint", failures);
+
+		// The buttons are commands the toolbar shows; pressing one flips its setting and the
+		// button follows the setting, not the press.
+		int refreshes = 0;
+		const auto buttons = make_buttons([&refreshes] { ++refreshes; });
+		const auto shown = make_button_bar(buttons)->buttons();
+		gui_check(shown.size() == 2 && shown[0].text == "Record clip" && shown[1].text == "Face priority" &&
+		              shown[0].checked == pipeline.recording() && shown[1].checked == pipeline.show_faces(),
+		          "the window offers recording and face priority as buttons that show their state", failures);
+		const bool faces_before = pipeline.show_faces();
+		buttons[1]->invoke();
+		const bool flipped = pipeline.show_faces() != faces_before && buttons[1]->checked == pipeline.show_faces();
+		pipeline.set_show_faces(faces_before);
+		const bool followed = sync_buttons(buttons) && buttons[1]->checked == faces_before && !sync_buttons(buttons);
+		gui_check(flipped && followed && refreshes == 1,
+		          "a button flips its setting and follows changes it did not make", failures);
 
 		const std::array<std::string_view, 1> test_params{"/TeSt"};
 		const std::array<std::string_view, 1> evaluate_params{"/EVALUATE"};
@@ -687,6 +694,15 @@ namespace
 	{
 		command_mode _mode = command_mode::gui;
 		bool _pipeline_started = false;
+		std::vector<ui::command_ptr> _buttons;
+		ui::toolbar_ptr _button_bar;
+
+		void refresh_buttons()
+		{
+			sync_buttons(_buttons);
+			if (_button_bar) _button_bar->update_button_state(false, false);
+			if (const auto f = frame()) f->invalidate();
+		}
 
 	public:
 		low_ban_app() : shell(ui::shell_options{}) {}
@@ -723,12 +739,26 @@ namespace
 			return false;
 		}
 
-		std::vector<ui::command_ptr> make_menus() override { return build_menu(*this); }
-
 		ui::element_ptr make_content() override
 		{
-			return std::make_shared<ui::canvas_element>([](render::draw_context& dc, const core::recti bounds)
-			{ draw_frame(dc, bounds, pipeline.status()); });
+			_buttons = make_buttons([this] { refresh_buttons(); });
+			_button_bar = make_button_bar(_buttons);
+
+			auto bar = std::make_shared<ui::elements>();
+			bar->padding(button_bar_padding_96, button_bar_padding_96);
+			bar->flex_container.direction = ui::flex_direction::row;
+			bar->flex_container.wrap = ui::flex_wrap::no_wrap;
+			bar->add(_button_bar);
+
+			auto content = std::make_shared<ui::elements>();
+			content->padding(0);
+			content->flex_container.direction = ui::flex_direction::column;
+			content->flex_container.wrap = ui::flex_wrap::no_wrap;
+			content->flex_container.align_items = ui::flex_align::stretch;
+			content->add(bar);
+			content->add(std::make_shared<ui::canvas_element>([](render::draw_context& dc, const core::recti bounds)
+			{ draw_frame(dc, bounds, pipeline.status()); }));
+			return content;
 		}
 
 		bool start(std::string_view) override
@@ -740,7 +770,11 @@ namespace
 			return true;
 		}
 
-		void frame_tick() override { tick_presentation(frame()); }
+		void frame_tick() override
+		{
+			if (sync_buttons(_buttons) && _button_bar) _button_bar->update_button_state(false, false);
+			tick_presentation(frame());
+		}
 
 		void stop() override
 		{

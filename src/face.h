@@ -1,48 +1,74 @@
-// Face detection.
+// Faces: where they are, their five landmarks, and how much each part of a face matters.
 //
-// A CNN face detector: a small depthwise-separable backbone with a three level feature
-// pyramid and per-cell objectness, classification and box regression heads.
+// Detection is libmug's (https://github.com/ZacWalk/libmug): YuNet - libfacedetection's network and weights, under
+// its 3-clause BSD licence - run on libmug's SIMD kernels over the frame's luma, read where it lies at video range.
+// Each face comes with a box and five landmarks, the same five every frame, so they are what the landmark wire
+// carries and what the receiver's warp moves.
 //
-// The network design and the trained weights in face-model.cpp come from libfacedetection by
-// Shiqi Yu (https://github.com/ShiqiYu/libfacedetection), used under its 3-clause BSD
-// licence; the full notice is reproduced in face.cpp and face-model.cpp. The inference code
-// here was rewritten for this application: no SIMD or OpenMP variants, no aligned blob
-// allocator, no C result-buffer API, and the five point keypoint branch is not evaluated
-// because landmarks come from the 68 point model instead.
+// Importance is where the transform codec spends its bits. Five points cannot say whether a mouth is open, a brow
+// raised or an eye shut, so the receiver's warp cannot reproduce those; they have to come through the picture. The
+// expression prior is a map, learned offline by tools/learn_expression_prior.py, of how far each part of a face
+// moves in ways the five points do not predict, in the frame libmug's template fit aligns every face to.
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "image.h"
 
-// Descriptor for one convolution in the generated weight table.
-struct face_conv_layer
+namespace libmug
 {
-	int channels;
-	int num_filters;
-	bool is_depthwise;
-	bool is_pointwise;
-	bool with_relu;
-	float* weights;
-	float* biases;
+	class face_detector;
+}
+
+// The five landmarks, in this order on every face. Left and right are the picture's.
+enum face_point : size_t
+{
+	eye_left,
+	eye_right,
+	nose_tip,
+	mouth_left,
+	mouth_right,
+	face_point_count
 };
 
-constexpr int face_model_layer_count = 53;
-extern face_conv_layer face_model_layers[face_model_layer_count];
-
-struct face_detection
+struct detected_face
 {
-	std::vector<rect_i> faces;
-
-	// Best score the network produced anywhere in the frame, before thresholding. A high
-	// peak with no faces means the threshold or the suppression rejected them; a peak near
-	// zero means the network never fired.
-	float peak_confidence = 0.0f;
+	rect_i box;                  // the network's box, hairline to chin
+	std::vector<point_i> points; // face_point_count landmarks
+	int confidence = 0;          // 0 to 100
 };
 
 class face_detector
 {
 public:
-	// Boxes follow the landmark model's convention: square, brow to chin.
-	face_detection detect(const video_frame& frame) const;
+	face_detector();
+	~face_detector();
+
+	face_detector(const face_detector&) = delete;
+	face_detector& operator=(const face_detector&) = delete;
+
+	// The faces in a frame's luma at video range, left to right then top to bottom: at most eight, the most
+	// confident. The detector reuses its buffers, so it serves one thread at a time.
+	std::vector<detected_face> detect(const image_u8& luma);
+
+private:
+	std::unique_ptr<libmug::face_detector> network;
 };
+
+// The expression prior: a square grid of cells over the 112-pixel square that libmug::template_fit aligns faces to,
+// 0 where a face's appearance is fully predicted by its five landmarks and 255 where it varies most beyond them.
+// Generated into expression-prior.cpp.
+constexpr int expression_prior_cells = 28;
+extern const uint8_t expression_prior[expression_prior_cells * expression_prior_cells];
+
+// The importance a face adds to the map, never lowering what is there: the face's box at the face's own weight,
+// raised towards the most important by the expression prior where the five landmarks place it.
+void add_face_importance(image_u8& importance, const rect_i& box, const std::vector<point_i>& points);
+
+// The background's and a face box's importance, on the 0 to 255 scale the codec reads; the prior raises a face from
+// its box's weight towards 255.
+constexpr uint8_t background_importance = 32;
+constexpr uint8_t face_importance = 96;

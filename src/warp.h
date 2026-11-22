@@ -19,18 +19,19 @@ struct mesh_triangle
 	int c = 0;
 };
 
-// The 68 landmarks plus ten points above the brows, so the forehead moves with the face.
+// The five landmarks plus a ring of twelve around them - forehead, temples, cheeks, jaw and
+// chin - placed from the eyes and mouth alone, so the whole face moves with its landmarks.
 std::vector<point_i> face_mesh_points(const std::vector<point_i>& landmarks);
 
 // Delaunay triangulation by Bowyer-Watson with exact integer predicates. Repeated points are
-// left out, so closed lips do not produce zero-area triangles, and every triangle is returned
-// with a positive signed area. Coordinates are clamped to +/-2048.
+// left out, so coincident landmarks do not produce zero-area triangles, and every triangle is
+// returned with a positive signed area. Coordinates are clamped to +/-2048.
 std::vector<mesh_triangle> delaunay_triangles(const std::vector<point_i>& points);
 
 // Moves the faces in `reference`, drawn at `from`, to `to`. Each face is triangulated at its
 // new position and every pixel inside the mesh is sampled from the matching triangle at the
 // old position; everything outside every mesh is copied. Faces are paired by index and left
-// alone unless both sides have all 68 points. Returns false, with `out` an exact copy of
+// alone unless both sides have all five landmarks. Returns false, with `out` an exact copy of
 // `reference`, when no face moved.
 bool warp_faces(const image_u8& reference, const face_geometry& from, const face_geometry& to, image_u8& out);
 

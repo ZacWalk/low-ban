@@ -28,7 +28,7 @@ struct point_f
 	float y = 0.0f;
 };
 
-// Inclusive on all four edges, matching the convention used by the landmark model file.
+// Inclusive on all four edges.
 struct rect_i
 {
 	int left = 0;
@@ -76,9 +76,6 @@ public:
 
 	bool contains(const int x, const int y) const { return x >= 0 && y >= 0 && x < frame_width && y < frame_height; }
 
-	// Zero outside the image; the landmark sampler relies on this.
-	T sample_or_zero(const int x, const int y) const { return contains(x, y) ? row(y)[x] : T{}; }
-
 	void resize(const int w, const int h)
 	{
 		if (w == frame_width && h == frame_height) return;
@@ -124,6 +121,9 @@ void yuv_to_bgra(const video_frame& frame, std::vector<uint8_t>& bgra);
 
 // The destination must already be at the wanted size; that is what selects the scale.
 void resize_bilinear(const image_u8& src, image_u8& dst);
+// Catmull-Rom, for enlarging: what both receivers show their coded pictures with. Like
+// resize_bilinear, the destination's size selects the scale.
+void resize_bicubic(const image_u8& src, image_u8& dst);
 void gaussian_blur(const image_u8& src, image_u8& dst);
 void sobel_edges(const image_u8& src, image_u8& dst);
 void contrast_stretch(image_u8& img);

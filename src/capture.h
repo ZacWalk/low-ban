@@ -1,6 +1,5 @@
-// Webcam capture through Media Foundation, and recording and replay of short clips for the
-// offline evaluation. YUY2 is requested because it is what webcams natively produce and it
-// hands us chroma for free, which the face detector uses.
+// Webcam capture through Media Foundation, recording and replay of short clips, and the stills
+// the offline evaluation scores. YUY2 is requested because it is what webcams natively produce.
 #pragma once
 
 #include <functional>
@@ -77,7 +76,9 @@ private:
 	impl* state = nullptr;
 };
 
-// Plays a recorded clip back as captured frames, each with its time in seconds.
+// Plays a clip back as captured frames, each with its time in seconds: a clip recorded here, or
+// a YUV4MPEG2 (.y4m) stream such as the standard video-conferencing test sequences, cropped to
+// the capture's shape about its centre.
 class clip_reader
 {
 public:
@@ -95,6 +96,14 @@ public:
 	void close();
 
 private:
+	bool open_y4m(const std::wstring& path, int width, int height, std::string& error);
+	bool read_y4m(video_frame& frame, double& seconds, std::string& error);
+
 	struct impl;
 	impl* state = nullptr;
 };
+
+// A still picture - a PNG in samples/, or anything else Windows can decode - scaled to `width` x
+// `height` and converted to planes as the camera delivers them: BT.601 at video range, chroma
+// half width. COM must be initialised on the calling thread.
+bool load_still(const std::wstring& path, int width, int height, video_frame& frame);

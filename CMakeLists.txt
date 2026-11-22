@@ -29,16 +29,32 @@ FetchContent_Declare(libdesktop
 )
 FetchContent_MakeAvailable(libdesktop)
 
+# Faces come from libmug, likewise from a sibling checkout when there is one, so a libmug
+# change can be tried here before it is committed there. Detection alone: low-ban never
+# recognises anyone, so libmug neither fetches nor builds SFace.
+if(NOT DEFINED FETCHCONTENT_SOURCE_DIR_LIBMUG
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../libmug/CMakeLists.txt")
+    set(FETCHCONTENT_SOURCE_DIR_LIBMUG "${CMAKE_CURRENT_SOURCE_DIR}/../libmug"
+        CACHE PATH "Local libmug checkout to build against")
+endif()
+
+set(LIBMUG_RECOGNITION OFF)
+FetchContent_Declare(libmug
+    GIT_REPOSITORY https://github.com/ZacWalk/libmug.git
+    GIT_TAG        fd94430daf52949ed719acaa4d7a8a072464178e
+)
+FetchContent_MakeAvailable(libmug)
+
 libdesktop_add_app(low-ban
     SOURCES
         src/baseline.cpp
         src/capture.cpp
         src/codec.cpp
-        src/draw.cpp
         src/engine.cpp
+        src/entropy.cpp
         src/evaluate.cpp
+        src/expression-prior.cpp
         src/face.cpp
-        src/face-model.cpp
         src/image.cpp
         src/landmarks.cpp
         src/main.cpp
@@ -54,8 +70,8 @@ target_sources(low-ban PRIVATE
     src/baseline.h
     src/capture.h
     src/codec.h
-    src/draw.h
     src/engine.h
+    src/entropy.h
     src/face.h
     src/image.h
     src/landmarks.h
@@ -67,7 +83,7 @@ target_compile_features(low-ban PRIVATE cxx_std_20)
 target_include_directories(low-ban PRIVATE src)
 target_compile_definitions(low-ban PRIVATE WIN32 _WINDOWS NOMINMAX UNICODE _UNICODE)
 target_compile_options(low-ban PRIVATE /W4 /MP /permissive-)
-target_link_libraries(low-ban PRIVATE libdesktop::ui windowscodecs)
+target_link_libraries(low-ban PRIVATE libdesktop::ui libmug::libmug windowscodecs)
 
 set_target_properties(low-ban PROPERTIES
     DEBUG_POSTFIX d

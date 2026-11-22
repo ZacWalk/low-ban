@@ -6,7 +6,30 @@
 
 namespace
 {
-	constexpr size_t landmark_count = 68;
+	constexpr size_t landmark_count = 5;
+
+	// The outline ring, each point from the eye centre or the mouth centre, plus tenths of the
+	// up vector (mouth centre to eye centre) and of the across vector (left eye to right eye).
+	// On libmug's template face these reach the hairline, the temples, the cheeks, the jaw and
+	// the chin.
+	struct outline_point
+	{
+		bool from_eyes;
+		int up_tenths;
+		int across_tenths;
+	};
+
+	// clang-format off
+	constexpr outline_point outline[] = {
+		{true, 14, 0},                     // forehead
+		{true, 11, -9},   {true, 11, 9},   // forehead sides
+		{true, 2, -14},   {true, 2, 14},   // temples
+		{false, 5, -15},  {false, 5, 15},  // cheeks, halfway up
+		{false, -3, -12}, {false, -3, 12}, // jaw
+		{false, -5, -6},  {false, -5, 6},  // either side of the chin
+		{false, -6, 0},                    // chin
+	};
+	// clang-format on
 
 	// Mesh coordinates are clamped to this range and the enclosing triangle is kept within a
 	// few spans of the points, so every predicate below fits comfortably in 64 bits.
@@ -116,23 +139,29 @@ namespace
 std::vector<point_i> face_mesh_points(const std::vector<point_i>& landmarks)
 {
 	std::vector<point_i> mesh;
-	mesh.reserve(landmarks.size() + 10);
+	mesh.reserve(landmarks.size() + std::size(outline));
 	for (const point_i p : landmarks) mesh.push_back(clamp_point(p));
 	if (landmarks.size() != landmark_count) return mesh;
 
-	// Up the face, from the chin to the centre of the eyes, then far enough again above each
-	// brow point to reach roughly the hairline. Twelve eye points are summed, so the vector
-	// is kept twelve times too long until the final division.
-	int64_t up_x = 0;
-	int64_t up_y = 0;
-	for (int i = 36; i < 48; ++i)
+	// Everything at twice its size until the final division, so the eye and mouth centres stay
+	// whole: a translation of every landmark by whole pixels moves every outline point exactly
+	// as far.
+	const int64_t eye_x = landmarks[0].x + landmarks[1].x;
+	const int64_t eye_y = landmarks[0].y + landmarks[1].y;
+	const int64_t mouth_x = landmarks[3].x + landmarks[4].x;
+	const int64_t mouth_y = landmarks[3].y + landmarks[4].y;
+	const int64_t up_x = eye_x - mouth_x;
+	const int64_t up_y = eye_y - mouth_y;
+	const int64_t across_x = 2 * static_cast<int64_t>(landmarks[1].x - landmarks[0].x);
+	const int64_t across_y = 2 * static_cast<int64_t>(landmarks[1].y - landmarks[0].y);
+	for (const outline_point& o : outline)
 	{
-		up_x += landmarks[i].x - landmarks[8].x;
-		up_y += landmarks[i].y - landmarks[8].y;
+		const int64_t base_x = o.from_eyes ? eye_x : mouth_x;
+		const int64_t base_y = o.from_eyes ? eye_y : mouth_y;
+		mesh.push_back(clamp_point(
+			{static_cast<int>(round_div(base_x * 10 + o.up_tenths * up_x + o.across_tenths * across_x, 20)),
+		     static_cast<int>(round_div(base_y * 10 + o.up_tenths * up_y + o.across_tenths * across_y, 20))}));
 	}
-	for (int i = 17; i <= 26; ++i)
-		mesh.push_back(clamp_point({landmarks[i].x + static_cast<int>(round_div(up_x * 9, 12 * 20)),
-		                            landmarks[i].y + static_cast<int>(round_div(up_y * 9, 12 * 20))}));
 	return mesh;
 }
 

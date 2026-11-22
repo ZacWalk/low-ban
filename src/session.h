@@ -1,7 +1,8 @@
 // One simulated call. The sender analyses each captured frame and two independent wires carry it
-// to two receivers: low-ban, with landmark geometry at 15 Hz and warped transform pictures at
-// 5 Hz, and an H.264 baseline at the same bitrate. Everything runs on explicit timestamps, so the
-// live engine and the offline evaluation run exactly the same code.
+// to two receivers: low-ban, whose packets carry the faces' landmarks and the picture together,
+// and an H.264 baseline held to the same payload rate. Both run on one 15 Hz clock. Everything
+// runs on explicit timestamps, so the live engine and the offline evaluation run exactly the
+// same code.
 #pragma once
 
 #include <cstdint>
@@ -17,20 +18,27 @@
 #include "landmarks.h"
 
 // Pictures are coded at this fraction of the capture size and scaled back up for display.
-// Detection and landmarking keep the full capture, where the features are.
+// Detection keeps the full capture, where the features are.
 constexpr int coded_scale = 2;
 
-// The low-ban picture clock, and the cap on every picture packet after the startup keyframe.
-constexpr double picture_interval_seconds = 0.2;
-constexpr size_t picture_packet_budget = 1200;
+// The call's clock: at most one low-ban packet and one H.264 frame each tick. Recorded clips are
+// written at this rate too.
+constexpr int packet_hz = 15;
 
-// The geometry clock. It is also the low-ban receiver's animation rate, the H.264 frame rate
-// and the frame rate recorded clips are written at.
-constexpr int geometry_hz = 15;
+// The payload rate both wires are held to: H.264's constant bit rate, and the rate low-ban's
+// packets draw from a token bucket at.
+constexpr int call_kbit_per_second = 20;
 
-// The H.264 baseline's constant bit rate: the low-ban picture cap plus a typical single-face
-// geometry stream, so the two wires spend about the same.
-constexpr int baseline_kbit_per_second = 52;
+// No low-ban packet after the startup keyframe is larger than this, which is also as much as
+// its token bucket can save up: one packet that never needs fragmenting.
+constexpr size_t packet_cap_bytes = 1200;
+
+// Low-ban's quality, the background's quantiser step (codec.h): the startup keyframe codes at
+// the first, and after it the session moves it a step a tick between the other two, coarser
+// while macroblocks worth sending go unsent for want of bytes, finer while bytes go unspent.
+constexpr int startup_quality = 12;
+constexpr int finest_quality = 9;
+constexpr int coarsest_quality = 36;
 
 // The quantiser offset H.264 applies inside the face boxes; six steps halve the quantiser.
 constexpr int baseline_face_offset = -6;
@@ -46,26 +54,27 @@ double audio_link_kbit_per_second();
 // A box in capture coordinates, at the coded picture's scale.
 rect_i coded_box(const rect_i& box);
 
+// Landmarks in capture coordinates, rounded to the coded picture's pixels: what low-ban sends.
+face_geometry coded_geometry(const face_geometry& faces);
+
 struct face_analysis
 {
-	std::vector<rect_i> boxes;      // every detection, refined by the previous frame's landmarks
-	std::vector<rect_i> landmarked; // the boxes that produced 68 points, matching `landmarks`
-	face_geometry landmarks;        // raw predictions on the source frame
-	float peak_confidence = 0.0f;
+	std::vector<rect_i> boxes; // one per face, left to right
+	face_geometry points;      // each face's five landmarks, in the same order
+	int confidence = 0;        // the most confident face's, 0 to 100
 };
 
-// Detection, landmarking and box refinement for the sender.
-class face_tracker
-{
-public:
-	void reset();
+// The sender's analysis of a frame: the faces in its luma and their landmarks.
+face_analysis analyse_faces(face_detector& detector, const image_u8& luma);
 
-	// `predictor` may be null, or unloaded, to detect without landmarking.
-	face_analysis analyse(const face_detector& detector, const shape_predictor* predictor, const video_frame& frame);
-
-private:
-	std::vector<rect_i> tracked;
-};
+// The five landmarks found again in a received picture against the source's, averaged over the
+// faces. A face the detector cannot find where it was counts as a whole eye spacing out. Faces
+// whose eyes are closer than min_scored_eye_spacing are left out: too small to carry an
+// expression at the coded size, and the detector finds them only intermittently - a poster on
+// the wall behind a speaker. False when there is nothing to measure.
+constexpr double min_scored_eye_spacing = 24.0;
+bool measure_expression(face_detector& detector, const image_u8& picture, const face_analysis& faces,
+                        landmark_error& error);
 
 struct receiver_view
 {
@@ -80,15 +89,16 @@ struct receiver_view
 struct render_state
 {
 	std::vector<uint8_t> source_bgra; // panel 1, top-down BGRA
-	std::vector<rect_i> faces;        // boxes the landmarker was given, in frame coordinates
+	std::vector<rect_i> faces;        // detected boxes, in frame coordinates
 	int width = 0;
 	int height = 0;
 	int face_count = 0;
-	float peak_confidence = 0.0f;
+	int confidence = 0;
 
 	receiver_view lowban;
-	double lowban_geometry_kbit_per_second = 0.0;
+	double lowban_geometry_kbit_per_second = 0.0; // the landmarks' share of the payload
 	int lowban_updated_blocks = 0;
+	int lowban_quality = 0; // the background's quantiser step
 	bool lowban_keyframe = false;
 	bool lowban_warped = false;
 
@@ -99,20 +109,19 @@ struct render_state
 
 struct session_options
 {
-	bool landmark_overlay = true;
 	bool baseline_face_offset = true;
 };
 
 // Totals since the last reset, for the offline evaluation.
 struct session_totals
 {
-	int64_t lowban_keyframe_bytes = 0;
-	int64_t lowban_picture_bytes = 0; // after the startup keyframe
-	int64_t lowban_geometry_bytes = 0;
-	size_t lowban_largest_picture_delta = 0;
-	int lowban_picture_packets = 0;
-	int lowban_geometry_packets = 0;
+	int64_t lowban_startup_bytes = 0;
+	int64_t lowban_bytes = 0;          // after the startup keyframe, landmarks included
+	int64_t lowban_geometry_bytes = 0; // the landmarks' share of lowban_bytes
+	size_t lowban_largest_packet = 0;  // after the startup keyframe
+	int lowban_packets = 0;            // after the startup keyframe
 	int lowban_warped_packets = 0;
+	int ticks = 0;
 	int64_t baseline_first_frame_bytes = 0;
 	int64_t baseline_bytes = 0; // after the first frame
 	int baseline_frames = 0;
@@ -124,9 +133,9 @@ public:
 	// Both wires start over from their startup keyframes.
 	void reset();
 
-	// Runs every clock that is due at `seconds`, then fills `state` with what both receivers
-	// show. `predictor` measures expression on the received pictures; null skips that.
-	void process(const video_frame& frame, double seconds, const face_analysis& faces, const shape_predictor* predictor,
+	// Runs the clock if it is due at `seconds`, then fills `state` with what both receivers
+	// show. `measure` finds the landmarks again in the received pictures; null skips that.
+	void process(const video_frame& frame, double seconds, const face_analysis& faces, face_detector* measure,
 	             const session_options& options, render_state& state);
 
 	const session_totals& totals() const { return sums; }
@@ -138,8 +147,8 @@ private:
 		bool started = false;
 	};
 
-	// Bits over a trailing window. `tick` is the stream's own interval, the shortest span a
-	// rate can sensibly be averaged over.
+	// Bits over a trailing window. `tick` is the clock's interval, the shortest span a rate
+	// can sensibly be averaged over.
 	class rolling_rate
 	{
 	public:
@@ -152,8 +161,8 @@ private:
 	};
 
 	static bool due(clock& schedule, double seconds, double interval);
-	void send_geometry(const face_geometry& smoothed, double seconds);
-	void send_picture(const image_u8& coded, const image_u8& coded_importance, double seconds);
+	void send_lowban(const image_u8& coded, const image_u8& coded_importance, const face_geometry& faces,
+	                 double seconds);
 	void send_baseline(const image_u8& coded, const face_analysis& faces, double seconds,
 	                   const session_options& options);
 
@@ -161,22 +170,19 @@ private:
 	int frame_height = 0;
 	bool face_offset_option = true;
 
-	clock geometry_clock;
-	clock picture_clock;
+	clock tick_clock;
 	landmark_filter smoother;
 
-	// Low-ban: one stream object holds both ends, as in-process encoder and decoder.
-	transform_codec codec;
-	temporal_landmark_stream geometry_wire;
-	temporal_transform_stream picture_wire;
-	face_geometry received_geometry;
-	bool picture_started = false;
-	bool animation_stale = false;
+	// Low-ban: one wire object holds both ends, as in-process encoder and decoder.
+	lowban_wire lowban;
+	bool lowban_started = false;
+	double lowban_tokens = 0.0; // bytes the bucket holds
+	int lowban_quality = startup_quality;
 	image_u8 lowban_shown;
 	int lowban_updated_blocks = 0;
 	bool lowban_keyframe = false;
 	bool lowban_warped = false;
-	rolling_rate lowban_picture_rate;
+	rolling_rate lowban_rate;
 	rolling_rate lowban_geometry_rate;
 	rolling_rate lowban_header_rate;
 
